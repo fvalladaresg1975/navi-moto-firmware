@@ -127,6 +127,7 @@ extern "C"
     extern lv_obj_t *ui_kenyaText;
     void ui_event_controlScreen(lv_event_t *e);
     extern lv_obj_t *ui_controlScreen;
+    extern lv_obj_t *ui_controlPanel;
     void ui_event_musicPlayButton(lv_event_t *e);
     extern lv_obj_t *ui_musicPlayButton;
     void ui_event_musicPrevButton(lv_event_t *e);
@@ -172,14 +173,6 @@ extern "C"
     extern lv_obj_t *ui_appBatteryText;
     extern lv_obj_t *ui_appBatteryLevel;
 
-    void ui_event_findPhone(lv_event_t *e);
-    extern lv_obj_t *ui_findPhoneScreen;
-    extern lv_obj_t *ui_findTitle;
-    void ui_event_findButton(lv_event_t *e);
-    extern lv_obj_t *ui_findButton;
-    extern lv_obj_t *ui_findButtonText;
-    extern lv_obj_t *ui_findPanel;
-    extern lv_obj_t *ui_findIcon;
     void ui_event_logoScreen(lv_event_t *e);
     extern lv_obj_t *ui_logoScreen;
     void ui_event_lvglLogo(lv_event_t *e);

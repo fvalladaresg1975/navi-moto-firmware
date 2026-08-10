@@ -10,13 +10,14 @@
 */
 
 #include "navigation.h"
+#include "../../../hal/esp32/displays/pins.h"
 
 #ifdef ENABLE_APP_NAVIGATION
 
 #define CANVAS_WIDTH 48
 #define CANVAS_HEIGHT 48
 
-REGISTER_APP("Navigation", &ui_img_arrow_png, ui_navScreen, ui_navScreen_screen_init);
+REGISTER_APP("Navegación", &ui_img_arrow_png, ui_navScreen, ui_navScreen_screen_init);
 
 lv_obj_t *ui_navPanel;
 lv_obj_t *ui_navDirection;
@@ -61,53 +62,76 @@ void ui_navScreen_screen_init()
     lv_obj_set_style_bg_opa(ui_navScreen, 255, LV_PART_MAIN | LV_STATE_DEFAULT);
 
     ui_navPanel = lv_obj_create(ui_navScreen);
-    lv_obj_set_width(ui_navPanel, 240);
-    lv_obj_set_height(ui_navPanel, 240);
+    // This panel's contents were laid out for a 240x240 screen; UI_SCALE_PX grows
+    // the real widget geometry to fill larger displays (see pins.h for why this
+    // resizes coordinates instead of using a render-only transform).
+    lv_obj_set_width(ui_navPanel, UI_SCALE_PX(240));
+    lv_obj_set_height(ui_navPanel, UI_SCALE_PX(240));
     lv_obj_set_align(ui_navPanel, LV_ALIGN_CENTER);
     lv_obj_remove_flag(ui_navPanel, LV_OBJ_FLAG_SCROLLABLE); /// Flags
-    lv_obj_set_style_radius(ui_navPanel, 120, LV_PART_MAIN | LV_STATE_DEFAULT);
+    lv_obj_set_style_radius(ui_navPanel, UI_SCALE_PX(120), LV_PART_MAIN | LV_STATE_DEFAULT);
     lv_obj_set_style_bg_color(ui_navPanel, lv_color_hex(0x000000), LV_PART_MAIN | LV_STATE_DEFAULT);
     lv_obj_set_style_bg_opa(ui_navPanel, 255, LV_PART_MAIN | LV_STATE_DEFAULT);
     lv_obj_set_style_border_width(ui_navPanel, 0, LV_PART_MAIN | LV_STATE_DEFAULT);
 
+    // No accented font is available above size 20, and flash is maxed out (99.6%) so a
+    // new larger one isn't an option. These labels have no touch targets and are cheap
+    // to render (just a few short strings), so a render-only transform_scale is safe
+    // here to make the text visually bigger - unlike the music panel's buttons/icon
+    // canvas above, where the same trick broke touch hit-areas and caused rendering
+    // glitches (see UI_SCALE_PX comment in pins.h).
     ui_navDirection = lv_label_create(ui_navPanel);
     lv_obj_set_width(ui_navDirection, 180);
     lv_obj_set_height(ui_navDirection, LV_SIZE_CONTENT); /// 1
     lv_obj_set_x(ui_navDirection, 0);
-    lv_obj_set_y(ui_navDirection, 156);
+    lv_obj_set_y(ui_navDirection, UI_SCALE_PX(156));
     lv_obj_set_align(ui_navDirection, LV_ALIGN_TOP_MID);
-    lv_label_set_text(ui_navDirection, "Available on v3.7.5+");
+    lv_label_set_text(ui_navDirection, "Disponible en v3.7.5+");
     lv_obj_set_style_text_align(ui_navDirection, LV_TEXT_ALIGN_CENTER, LV_PART_MAIN | LV_STATE_DEFAULT);
     lv_obj_set_style_text_font(ui_navDirection, &lv_font_montserrat_16, LV_PART_MAIN | LV_STATE_DEFAULT);
+    lv_obj_set_style_transform_pivot_x(ui_navDirection, LV_PCT(50), LV_PART_MAIN | LV_STATE_DEFAULT);
+    lv_obj_set_style_transform_pivot_y(ui_navDirection, LV_PCT(50), LV_PART_MAIN | LV_STATE_DEFAULT);
+    lv_obj_set_style_transform_scale_x(ui_navDirection, NAV_TEXT_SCALE, LV_PART_MAIN | LV_STATE_DEFAULT);
+    lv_obj_set_style_transform_scale_y(ui_navDirection, NAV_TEXT_SCALE, LV_PART_MAIN | LV_STATE_DEFAULT);
 
     ui_navText = lv_label_create(ui_navPanel);
     lv_obj_set_width(ui_navText, LV_SIZE_CONTENT);  /// 1
     lv_obj_set_height(ui_navText, LV_SIZE_CONTENT); /// 1
     lv_obj_set_x(ui_navText, 0);
-    lv_obj_set_y(ui_navText, 21);
+    lv_obj_set_y(ui_navText, UI_SCALE_PX(21));
     lv_obj_set_align(ui_navText, LV_ALIGN_TOP_MID);
-    lv_label_set_text(ui_navText, "Navigation\nESP32 only");
+    lv_label_set_text(ui_navText, "Navegación\nSolo ESP32");
     lv_obj_set_style_text_align(ui_navText, LV_TEXT_ALIGN_CENTER, LV_PART_MAIN | LV_STATE_DEFAULT);
     lv_obj_set_style_text_font(ui_navText, &lv_font_montserrat_20, LV_PART_MAIN | LV_STATE_DEFAULT);
+    lv_obj_set_style_transform_pivot_x(ui_navText, LV_PCT(50), LV_PART_MAIN | LV_STATE_DEFAULT);
+    lv_obj_set_style_transform_pivot_y(ui_navText, LV_PCT(50), LV_PART_MAIN | LV_STATE_DEFAULT);
+    lv_obj_set_style_transform_scale_x(ui_navText, NAV_TEXT_SCALE, LV_PART_MAIN | LV_STATE_DEFAULT);
+    lv_obj_set_style_transform_scale_y(ui_navText, NAV_TEXT_SCALE, LV_PART_MAIN | LV_STATE_DEFAULT);
 
     ui_navDistance = lv_label_create(ui_navPanel);
     lv_obj_set_width(ui_navDistance, LV_SIZE_CONTENT);  /// 1
     lv_obj_set_height(ui_navDistance, LV_SIZE_CONTENT); /// 1
     lv_obj_set_x(ui_navDistance, 0);
-    lv_obj_set_y(ui_navDistance, 121);
+    lv_obj_set_y(ui_navDistance, UI_SCALE_PX(121) + 10);
     lv_obj_set_align(ui_navDistance, LV_ALIGN_TOP_MID);
     lv_label_set_text(ui_navDistance, "Chronos");
     lv_obj_set_style_text_font(ui_navDistance, &lv_font_montserrat_30, LV_PART_MAIN | LV_STATE_DEFAULT);
+    lv_obj_set_style_transform_pivot_x(ui_navDistance, LV_PCT(50), LV_PART_MAIN | LV_STATE_DEFAULT);
+    lv_obj_set_style_transform_pivot_y(ui_navDistance, LV_PCT(50), LV_PART_MAIN | LV_STATE_DEFAULT);
+    lv_obj_set_style_transform_scale_x(ui_navDistance, NAV_DISTANCE_SCALE, LV_PART_MAIN | LV_STATE_DEFAULT);
+    lv_obj_set_style_transform_scale_y(ui_navDistance, NAV_DISTANCE_SCALE, LV_PART_MAIN | LV_STATE_DEFAULT);
 
     LV_DRAW_BUF_DEFINE_STATIC(cbuf, CANVAS_WIDTH, CANVAS_HEIGHT, LV_COLOR_FORMAT_I2);
     LV_DRAW_BUF_INIT_STATIC(cbuf);
 
+    // The canvas holds a fixed 48x48 bitmap streamed pixel-by-pixel from the phone
+    // (setNavIconPx below), so its own size stays native res - only reposition it.
     ui_navIconCanvas = lv_canvas_create(ui_navPanel);
     lv_canvas_set_draw_buf(ui_navIconCanvas, &cbuf);
     lv_obj_set_width(ui_navIconCanvas, 48);
     lv_obj_set_height(ui_navIconCanvas, 48);
-    lv_obj_set_x(ui_navIconCanvas, 0);
-    lv_obj_set_y(ui_navIconCanvas, 68);
+    lv_obj_set_x(ui_navIconCanvas, -8);
+    lv_obj_set_y(ui_navIconCanvas, UI_SCALE_PX(68));
     lv_obj_set_align(ui_navIconCanvas, LV_ALIGN_TOP_MID);
     lv_obj_remove_flag(ui_navIconCanvas, LV_OBJ_FLAG_SCROLLABLE); /// Flags
     lv_obj_set_style_radius(ui_navIconCanvas, 0, LV_PART_MAIN | LV_STATE_DEFAULT);
@@ -115,15 +139,28 @@ void ui_navScreen_screen_init()
     lv_obj_set_style_bg_opa(ui_navIconCanvas, 255, LV_PART_MAIN | LV_STATE_DEFAULT);
     lv_obj_set_style_border_width(ui_navIconCanvas, 0, LV_PART_MAIN | LV_STATE_DEFAULT);
     lv_canvas_fill_bg(ui_navIconCanvas, lv_color_black(), LV_OPA_COVER);
+    // This is an I2 (2bpp/4-index) canvas, but setNavIconPx() below passes full-range
+    // colors (0,0,0 / 255,255,255) into lv_canvas_set_px(), which derives the palette
+    // index from color.blue masked to 2 bits - i.e. index 0 for "off" but index 3
+    // (255 & 0x3) for "on", not index 1. Only 0/1 were defined here, leaving "on"
+    // pixels (index 3) pointing at an undefined palette entry. Define all 4 so
+    // whichever index actually gets hit, off=black and on=white consistently.
     lv_canvas_set_palette(ui_navIconCanvas, 0, lv_color32_make(0, 0, 0, 255));
     lv_canvas_set_palette(ui_navIconCanvas, 1, lv_color32_make(255, 255, 255, 255));
+    lv_canvas_set_palette(ui_navIconCanvas, 2, lv_color32_make(0, 0, 0, 255));
+    lv_canvas_set_palette(ui_navIconCanvas, 3, lv_color32_make(255, 255, 255, 255));
+    // Tried lv_image_set_scale() here to enlarge the icon - confirmed on hardware it
+    // breaks rendering on this indexed/low-bpp canvas (showed as a small broken square
+    // instead of the icon), same class of issue as transform_scale caused on the music
+    // panel's canvas earlier. Reverted - see navigation.c's own note above about why
+    // this canvas is kept at native 48x48.
 
     ui_navIcon = lv_image_create(ui_navPanel);
     lv_image_set_src(ui_navIcon, &ui_img_chronos_logo_png);
     lv_obj_set_width(ui_navIcon, LV_SIZE_CONTENT);  /// 1
     lv_obj_set_height(ui_navIcon, LV_SIZE_CONTENT); /// 1
-    lv_obj_set_x(ui_navIcon, 0);
-    lv_obj_set_y(ui_navIcon, 68);
+    lv_obj_set_x(ui_navIcon, -8);
+    lv_obj_set_y(ui_navIcon, UI_SCALE_PX(68));
     lv_obj_set_align(ui_navIcon, LV_ALIGN_TOP_MID);
     lv_obj_remove_flag(ui_navIcon, LV_OBJ_FLAG_SCROLLABLE); /// Flags
 
@@ -189,6 +226,20 @@ void setNavIconPx(uint16_t x, uint16_t y, bool on)
     {
         lv_canvas_set_px(ui_navIconCanvas, x, y, lv_color_make(0, 0, 0), LV_OPA_COVER);
     }
+#endif
+}
+
+void navIconRefresh(void)
+{
+#ifdef ENABLE_APP_NAVIGATION
+    if (!ui_navScreen){
+        return;
+    }
+    // lv_canvas_set_px() writes straight into the draw buffer without invalidating,
+    // so without this the canvas only gets redrawn where some other nearby widget's
+    // own invalidation happens to overlap it - leaving stale pixels from the previous
+    // icon anywhere that doesn't overlap (seen as the icon looking "cut off").
+    lv_obj_invalidate(ui_navIconCanvas);
 #endif
 }
 

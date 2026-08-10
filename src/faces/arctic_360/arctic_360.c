@@ -397,7 +397,7 @@ void update_status_arctic_360(int battery, bool connection){
 	} else {
 		lv_obj_clear_flag(face_arctic_360_16_259332, LV_OBJ_FLAG_HIDDEN);
 	}
-	lv_img_set_src(face_arctic_360_34_284972, face_arctic_360_dial_img_34_284972_group[(battery / (100 / 7)) % 7]);
+	{ int battLevel = battery / (100 / 7); if (battLevel > 6) battLevel = 6; lv_img_set_src(face_arctic_360_34_284972, face_arctic_360_dial_img_34_284972_group[battLevel]); }
 
 #endif
 }

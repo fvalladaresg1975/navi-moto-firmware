@@ -47,9 +47,9 @@ void qmi8658c_timer_cb(lv_timer_t *timer)
     // counter++;
 
     // if (qmi_d.success){
-    //     lv_label_set_text(ui_accTitle, "Raw Accelerometer");
+    //     lv_label_set_text(ui_accTitle, "Acelerómetro crudo");
     // } else {
-    //     lv_label_set_text(ui_accTitle, "Read Failed");
+    //     lv_label_set_text(ui_accTitle, "Error de lectura");
     // }
 
     lv_label_set_text_fmt(ui_tempLabel, "Temp: %.2f°C", qmi_d.temp);
@@ -165,7 +165,7 @@ void ui_imuScreen_screen_init()
     lv_obj_set_width(ui_accTitle, LV_SIZE_CONTENT);  /// 1
     lv_obj_set_height(ui_accTitle, LV_SIZE_CONTENT); /// 1
     lv_obj_set_align(ui_accTitle, LV_ALIGN_CENTER);
-    lv_label_set_text(ui_accTitle, "Raw Accelerometer");
+    lv_label_set_text(ui_accTitle, "Acelerómetro crudo");
 
     ui_accXText = lv_label_create(ui_imuPanel);
     lv_obj_set_width(ui_accXText, 200);
@@ -207,7 +207,7 @@ void ui_imuScreen_screen_init()
     lv_obj_set_width(ui_gyroTitle, LV_SIZE_CONTENT);  /// 1
     lv_obj_set_height(ui_gyroTitle, LV_SIZE_CONTENT); /// 1
     lv_obj_set_align(ui_gyroTitle, LV_ALIGN_CENTER);
-    lv_label_set_text(ui_gyroTitle, "Raw Gyroscope");
+    lv_label_set_text(ui_gyroTitle, "Giroscopio crudo");
 
     ui_gyroXText = lv_label_create(ui_imuPanel);
     lv_obj_set_width(ui_gyroXText, 200);
@@ -249,7 +249,7 @@ void ui_imuScreen_screen_init()
     lv_obj_set_width(ui_tempLabel, 200);
     lv_obj_set_height(ui_tempLabel, LV_SIZE_CONTENT); /// 1
     lv_obj_set_align(ui_tempLabel, LV_ALIGN_CENTER);
-    lv_label_set_text(ui_tempLabel, "Temp: 35C");
+    lv_label_set_text(ui_tempLabel, "Temp: 35°C");
 
     // ui_rtwPanel = lv_obj_create(ui_imuPanel);
     // lv_obj_set_width(ui_rtwPanel, 220);
@@ -270,7 +270,7 @@ void ui_imuScreen_screen_init()
     // lv_obj_set_width(ui_rtwText, LV_SIZE_CONTENT);  /// 1
     // lv_obj_set_height(ui_rtwText, LV_SIZE_CONTENT); /// 1
     // lv_obj_set_align(ui_rtwText, LV_ALIGN_CENTER);
-    // lv_label_set_text(ui_rtwText, "Raise to Wake");
+    // lv_label_set_text(ui_rtwText, "Levantar para activar");
     // lv_obj_set_style_text_font(ui_rtwText, &lv_font_montserrat_14, LV_PART_MAIN | LV_STATE_DEFAULT);
 
     // ui_rtwSwitch = lv_switch_create(ui_rtwPanel);
@@ -300,7 +300,7 @@ void ui_imu_set_info(bool status, uint8_t id, uint8_t rev)
     }
     else
     {
-        lv_label_set_text(ui_imuInfo, "Failed to init IMU");
+        lv_label_set_text(ui_imuInfo, "Error al iniciar el IMU");
         lv_obj_add_flag(ui_imuPanel, LV_OBJ_FLAG_HIDDEN);
     }
 

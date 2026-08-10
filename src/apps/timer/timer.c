@@ -8,7 +8,7 @@
 #ifdef ENABLE_APP_TIMER
 
 
-REGISTER_APP("Timer", &ui_img_timer_png, ui_timerScreen, timer_screen_init);
+REGISTER_APP("Temporizador", &ui_img_timer_png, ui_timerScreen, timer_screen_init);
 
 static lv_obj_t *ui_timerScreen;
 static lv_obj_t *ui_customTimer;
@@ -79,7 +79,7 @@ void time_timer_cb(lv_timer_t *t)
     if (rem_time <= 0)
     {
         lv_obj_remove_flag(ui_timerText, LV_OBJ_FLAG_HIDDEN);
-        lv_label_set_text(ui_customLabel1, "Close");
+        lv_label_set_text(ui_customLabel1, "Cerrar");
         if (time_timer != NULL)
         {
             lv_timer_delete(time_timer);
@@ -108,7 +108,7 @@ void start_timer_event(lv_event_t *e)
 
         lv_arc_set_range(ui_arcTimer, 0, rem_time);
         lv_arc_set_value(ui_arcTimer, rem_time);
-        lv_label_set_text(ui_customLabel1, "Stop");
+        lv_label_set_text(ui_customLabel1, "Detener");
         lv_obj_add_flag(ui_timerText, LV_OBJ_FLAG_HIDDEN);
         lv_obj_add_flag(ui_customTimer, LV_OBJ_FLAG_HIDDEN);
         lv_obj_remove_flag(ui_runningTimer, LV_OBJ_FLAG_HIDDEN);
@@ -188,7 +188,7 @@ void timer_screen_init()
     lv_obj_set_x(ui_secLabel, 38);
     lv_obj_set_y(ui_secLabel, -95);
     lv_obj_set_align(ui_secLabel, LV_ALIGN_CENTER);
-    lv_label_set_text(ui_secLabel, "Sec");
+    lv_label_set_text(ui_secLabel, "Seg");
     lv_obj_set_style_text_color(ui_secLabel, lv_color_hex(0xFFFFFF), LV_PART_MAIN | LV_STATE_DEFAULT);
     lv_obj_set_style_text_opa(ui_secLabel, 255, LV_PART_MAIN | LV_STATE_DEFAULT);
     lv_obj_set_style_text_font(ui_secLabel, &lv_font_montserrat_18, LV_PART_MAIN | LV_STATE_DEFAULT);
@@ -226,7 +226,7 @@ void timer_screen_init()
     lv_obj_set_width(ui_customLabel, LV_SIZE_CONTENT);  /// 1
     lv_obj_set_height(ui_customLabel, LV_SIZE_CONTENT); /// 1
     lv_obj_set_align(ui_customLabel, LV_ALIGN_CENTER);
-    lv_label_set_text(ui_customLabel, "Start");
+    lv_label_set_text(ui_customLabel, "Iniciar");
     lv_obj_set_style_text_font(ui_customLabel, &lv_font_montserrat_18, LV_PART_MAIN | LV_STATE_DEFAULT);
 
     ui_runningTimer = lv_obj_create(ui_timerScreen);
@@ -242,7 +242,7 @@ void timer_screen_init()
     lv_obj_set_x(ui_timerText, 0);
     lv_obj_set_y(ui_timerText, -50);
     lv_obj_set_align(ui_timerText, LV_ALIGN_CENTER);
-    lv_label_set_text(ui_timerText, "Timer \nEnded");
+    lv_label_set_text(ui_timerText, "Temporizador\nFinalizado");
     lv_obj_set_style_text_color(ui_timerText, lv_color_hex(0xFFFFFF), LV_PART_MAIN | LV_STATE_DEFAULT);
     lv_obj_set_style_text_opa(ui_timerText, 255, LV_PART_MAIN | LV_STATE_DEFAULT);
     lv_obj_set_style_text_align(ui_timerText, LV_TEXT_ALIGN_CENTER, LV_PART_MAIN | LV_STATE_DEFAULT);
@@ -290,7 +290,7 @@ void timer_screen_init()
     lv_obj_set_width(ui_customLabel1, LV_SIZE_CONTENT);  /// 1
     lv_obj_set_height(ui_customLabel1, LV_SIZE_CONTENT); /// 1
     lv_obj_set_align(ui_customLabel1, LV_ALIGN_CENTER);
-    lv_label_set_text(ui_customLabel1, "Stop");
+    lv_label_set_text(ui_customLabel1, "Detener");
     lv_obj_set_style_text_font(ui_customLabel1, &lv_font_montserrat_18, LV_PART_MAIN | LV_STATE_DEFAULT);
 
     lv_obj_add_event_cb(ui_timerScreen, ui_event_timerScreen, LV_EVENT_ALL, NULL);

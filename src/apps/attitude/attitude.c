@@ -11,7 +11,7 @@
 
 #ifdef ENABLE_APP_ATTITUDE
 
-REGISTER_APP("Attitude", &ui_img_airport_png, ui_attiudeScreen, ui_attiudeScreen_screen_init);
+REGISTER_APP("Inclinómetro", &ui_img_airport_png, ui_attiudeScreen, ui_attiudeScreen_screen_init);
 
 lv_obj_t *ui_img_dial_bg;
 lv_obj_t *ui_img_pitch_scale;

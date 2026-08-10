@@ -30,6 +30,11 @@ void imu_init();
 imu_data_t get_imu_data();
 void imu_close();
 
+/* Asks the phone to place a call to the contact at [index] in the list the phone itself
+   synced to the watch (so the index is enough - no need to send the number back).
+   Implemented in the HAL since it needs the BLE `watch` object. */
+void dial_contact(int index);
+
 
 #ifdef __cplusplus
 } /*extern "C"*/

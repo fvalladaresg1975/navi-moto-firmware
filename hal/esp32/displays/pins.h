@@ -236,6 +236,12 @@
 #define SCREEN_WIDTH 466
 #define SCREEN_HEIGHT 466
 
+// Physical "BOOT" button, GPIO0 - same lolin_s3_pro base module as ESPS3_2_06, which
+// confirmed this pin works as a real button on real hardware (see that board's section
+// above). Extreme Power Save step 1: needed as a wake source once touch/BLE go to sleep.
+// Not otherwise used on this board, so this is safe to claim as a general-purpose button.
+#define BUTTON_HOME 0
+
 #define LCD_CS 12
 #define LCD_SCK 38
 #define LCD_SD0 4
@@ -450,3 +456,24 @@
 #define MAX_FILE_OPEN 10
 
 #endif
+
+// Several legacy screens (navigation, media controls) were laid out for a 240x240
+// canvas and never adapted for larger displays. UI_SCALE_PX rescales a design-time
+// pixel value (position/size) to the actual screen so those screens fill bigger
+// panels. This resizes real widget coordinates rather than using LVGL's
+// transform_scale, which only affects rendering: it doesn't grow touch hit-areas
+// to match and forces the scaled subtree through an offscreen layer every frame
+// (visible lag on wide panels, and glitches on low-bpp canvas widgets).
+#define UI_LAYOUT_BASE_PX 240
+#define UI_SCREEN_MIN_PX ((SCREEN_WIDTH) < (SCREEN_HEIGHT) ? (SCREEN_WIDTH) : (SCREEN_HEIGHT))
+#define UI_SCALE (256 * UI_SCREEN_MIN_PX / UI_LAYOUT_BASE_PX)
+#define UI_SCALE_PX(n) (((n) * UI_SCREEN_MIN_PX) / UI_LAYOUT_BASE_PX)
+
+// Static, non-interactive text labels (no touch target to misalign) still use a
+// render-only transform_scale to look bigger than their real font asset, since no
+// accented font above size 20 fits in flash. Toned down from UI_SCALE so enlarged
+// navigation labels have less chance of visually overlapping the icon canvas above.
+#define NAV_TEXT_SCALE (256 + (((UI_SCALE) - 256) * 6) / 10)
+// The distance-to-turn label sits directly under the icon canvas; scaled as large as
+// the others it can visually crowd the icon's bottom edge, so it gets a smaller boost.
+#define NAV_DISTANCE_SCALE (256 + (((UI_SCALE) - 256) * 4) / 10)

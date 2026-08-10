@@ -10,7 +10,7 @@
 #ifdef ENABLE_APP_TOUCH_TEST
 
 /* Replace NULL with your app icon eg &touch_test_icon */
-REGISTER_APP("Touch Test", &ui_img_sample_png, touch_test_screen_main, touch_test_screen_init);
+REGISTER_APP("Prueba táctil", &ui_img_sample_png, touch_test_screen_main, touch_test_screen_init);
 
 lv_obj_t *label;
 lv_obj_t *dot;
@@ -68,7 +68,7 @@ void touch_test_screen_event_cb(lv_event_t *e)
         lv_obj_set_flag(button, LV_OBJ_FLAG_HIDDEN, false);
 #endif
 
-        lv_label_set_text(label, "Released");
+        lv_label_set_text(label, "Liberado");
     }
 
     if (event_code == LV_EVENT_GESTURE && lv_indev_get_gesture_dir(lv_indev_active()) == LV_DIR_RIGHT)
@@ -85,7 +85,7 @@ void button_event_cb(lv_event_t *e)
     {
         /* Do something when the button is clicked */
         /* This is a good place to start an action or open a new screen */
-        lv_label_set_text(label, "Restarting");
+        lv_label_set_text(label, "Reiniciando");
         // Add your recalibration code here
         clear_touch_calibration();
     }
@@ -101,7 +101,7 @@ void touch_test_screen_init(void)
 
     label = lv_label_create(touch_test_screen_main);
     lv_obj_set_align(label, LV_ALIGN_CENTER);
-    lv_label_set_text(label, "Hello world!\nTouch Test App");
+    lv_label_set_text(label, "¡Hola mundo!\nApp de prueba táctil");
 
     dot = lv_obj_create(touch_test_screen_main);
     lv_obj_remove_style_all(dot);
@@ -119,7 +119,7 @@ void touch_test_screen_init(void)
     lv_obj_set_y(button, 100);
     lv_obj_set_size(button, LV_SIZE_CONTENT, LV_SIZE_CONTENT);
     lv_obj_t *btn_label = lv_label_create(button);
-    lv_label_set_text(btn_label, "Recalibrate");
+    lv_label_set_text(btn_label, "Recalibrar");
     lv_obj_center(btn_label);
     lv_obj_add_event_cb(button, button_event_cb, LV_EVENT_CLICKED, NULL);
 #endif
@@ -129,7 +129,7 @@ void touch_test_screen_init(void)
 
 void __attribute__((weak)) clear_touch_calibration(void)
 {
-    lv_label_set_text(label, "Function not implemented.");
+    lv_label_set_text(label, "Función no implementada.");
 }
 
 #endif

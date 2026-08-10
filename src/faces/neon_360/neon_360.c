@@ -582,7 +582,7 @@ void update_status_neon_360(int battery, bool connection){
     {
         return;
     }
-	lv_img_set_src(face_neon_360_2_1662, face_neon_360_dial_img_2_1662_group[(battery / (100 / 11)) % 11]);
+	{ int battLevel = battery / (100 / 11); if (battLevel > 10) battLevel = 10; lv_img_set_src(face_neon_360_2_1662, face_neon_360_dial_img_2_1662_group[battLevel]); }
 	lv_img_set_src(face_neon_360_3_10729, face_neon_360_dial_img_3_10729_group[(battery / 10) % 10]);
 	lv_img_set_src(face_neon_360_4_10729, face_neon_360_dial_img_3_10729_group[(battery / 100) % 10]);
 	if (battery < 100)

@@ -32,7 +32,7 @@
 #define SPEED_LIMIT_FACTOR 3.5
 
 
-REGISTER_APP("Racing", &ui_img_car_png, ui_raceScreen, ui_raceScreen_screen_init);
+REGISTER_APP("Carreras", &ui_img_car_png, ui_raceScreen, ui_raceScreen_screen_init);
 
 void ui_event_raceScreen(lv_event_t *e);
 void ui_event_roadPanel(lv_event_t *e);
@@ -132,8 +132,8 @@ void ui_event_raceScreen(lv_event_t *e)
 
         lv_label_set_text(ui_distanceLabel, "0");
         lv_label_set_text(ui_speedLabel, "0");
-        lv_label_set_text(ui_raceButtonText, "Start");
-        lv_label_set_text(ui_raceLabel, "High Score");
+        lv_label_set_text(ui_raceButtonText, "Iniciar");
+        lv_label_set_text(ui_raceLabel, "Puntaje máximo");
         lv_label_set_text_fmt(ui_raceScore, "%dm", highScore);
         lv_obj_remove_flag(ui_racePanel, LV_OBJ_FLAG_HIDDEN); /// Flags
         lv_obj_add_flag(ui_raceInfo, LV_OBJ_FLAG_HIDDEN);    /// Flags
@@ -183,15 +183,15 @@ void ui_event_roadPanel(lv_event_t *e)
             isRacing = false;
             if (!gameOver)
             {
-                lv_label_set_text(ui_raceButtonText, "Continue");
-                lv_label_set_text(ui_raceLabel, "Paused");
+                lv_label_set_text(ui_raceButtonText, "Continuar");
+                lv_label_set_text(ui_raceLabel, "Pausado");
                 lv_label_set_text_fmt(ui_raceScore, "%dm", currentScore);
                 lv_obj_add_flag(ui_raceInfo, LV_OBJ_FLAG_HIDDEN); /// Flags
             }
             else
             {
-                lv_label_set_text(ui_raceButtonText, "Start");
-                lv_label_set_text(ui_raceLabel, "Your Score");
+                lv_label_set_text(ui_raceButtonText, "Iniciar");
+                lv_label_set_text(ui_raceLabel, "Tu puntaje");
                 lv_label_set_text_fmt(ui_raceScore, "%dm", currentScore);
                 lv_obj_remove_flag(ui_raceInfo, LV_OBJ_FLAG_HIDDEN); /// Flags
             }
@@ -427,7 +427,7 @@ void ui_raceScreen_screen_init()
     lv_obj_set_width(ui_raceTitle, 100);
     lv_obj_set_height(ui_raceTitle, LV_SIZE_CONTENT); /// 1
     lv_obj_set_align(ui_raceTitle, LV_ALIGN_CENTER);
-    lv_label_set_text(ui_raceTitle, "Race");
+    lv_label_set_text(ui_raceTitle, "Carrera");
     lv_obj_set_style_text_align(ui_raceTitle, LV_TEXT_ALIGN_CENTER, LV_PART_MAIN | LV_STATE_DEFAULT);
     lv_obj_set_style_text_font(ui_raceTitle, &lv_font_montserrat_20, LV_PART_MAIN | LV_STATE_DEFAULT);
     lv_obj_set_style_border_color(ui_raceTitle, lv_color_hex(0xFFFFFF), LV_PART_MAIN | LV_STATE_DEFAULT);
@@ -439,7 +439,7 @@ void ui_raceScreen_screen_init()
     lv_obj_set_width(ui_raceInfo, LV_SIZE_CONTENT);  /// 1
     lv_obj_set_height(ui_raceInfo, LV_SIZE_CONTENT); /// 1
     lv_obj_set_align(ui_raceInfo, LV_ALIGN_CENTER);
-    lv_label_set_text(ui_raceInfo, "Crashed");
+    lv_label_set_text(ui_raceInfo, "Chocaste");
     lv_obj_add_flag(ui_raceInfo, LV_OBJ_FLAG_HIDDEN); /// Flags
     lv_obj_set_style_text_color(ui_raceInfo, lv_color_hex(0xF77272), LV_PART_MAIN | LV_STATE_DEFAULT);
     lv_obj_set_style_text_opa(ui_raceInfo, 255, LV_PART_MAIN | LV_STATE_DEFAULT);
@@ -449,7 +449,7 @@ void ui_raceScreen_screen_init()
     lv_obj_set_width(ui_raceLabel, LV_SIZE_CONTENT);  /// 1
     lv_obj_set_height(ui_raceLabel, LV_SIZE_CONTENT); /// 1
     lv_obj_set_align(ui_raceLabel, LV_ALIGN_CENTER);
-    lv_label_set_text(ui_raceLabel, "Your Score");
+    lv_label_set_text(ui_raceLabel, "Tu puntaje");
     lv_obj_set_style_text_font(ui_raceLabel, &lv_font_montserrat_16, LV_PART_MAIN | LV_STATE_DEFAULT);
 
     ui_raceScore = lv_label_create(ui_racePanel);
@@ -473,7 +473,7 @@ void ui_raceScreen_screen_init()
     lv_obj_set_width(ui_raceButtonText, LV_SIZE_CONTENT);  /// 1
     lv_obj_set_height(ui_raceButtonText, LV_SIZE_CONTENT); /// 40
     lv_obj_set_align(ui_raceButtonText, LV_ALIGN_CENTER);
-    lv_label_set_text(ui_raceButtonText, "Start");
+    lv_label_set_text(ui_raceButtonText, "Iniciar");
 
     ui_exitRace = lv_button_create(ui_racePanel);
     lv_obj_set_width(ui_exitRace, 100);
@@ -489,7 +489,7 @@ void ui_raceScreen_screen_init()
     lv_obj_set_width(ui_exitRaceText, LV_SIZE_CONTENT);  /// 1
     lv_obj_set_height(ui_exitRaceText, LV_SIZE_CONTENT); /// 40
     lv_obj_set_align(ui_exitRaceText, LV_ALIGN_CENTER);
-    lv_label_set_text(ui_exitRaceText, "Exit");
+    lv_label_set_text(ui_exitRaceText, "Salir");
 
     lv_obj_add_event_cb(ui_roadPanel, ui_event_roadPanel, LV_EVENT_ALL, NULL);
     lv_obj_add_event_cb(ui_leftButton, ui_event_leftButton, LV_EVENT_ALL, NULL);
@@ -597,15 +597,15 @@ void ui_raceScreen_screen_loop()
             lv_label_set_text(ui_speedLabel, "0");
 
             lv_obj_remove_flag(ui_racePanel, LV_OBJ_FLAG_HIDDEN); /// Flags
-            lv_label_set_text(ui_raceButtonText, "Start");
-            lv_label_set_text(ui_raceLabel, "Your Score");
+            lv_label_set_text(ui_raceButtonText, "Iniciar");
+            lv_label_set_text(ui_raceLabel, "Tu puntaje");
             lv_label_set_text_fmt(ui_raceScore, "%dm", currentScore);
             lv_obj_remove_flag(ui_raceInfo, LV_OBJ_FLAG_HIDDEN); /// Flags
 
             if (currentScore > highScore)
             {
                 highScore = currentScore;
-                lv_label_set_text(ui_raceLabel, "New High Score");
+                lv_label_set_text(ui_raceLabel, "¡Nuevo récord!");
                 savePrefInt("racing_high", highScore);
             }
             currentScore = 0;

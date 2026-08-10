@@ -89,14 +89,30 @@ Encoder myEnc(ENCODER_A, ENCODER_B);
 RtcPCF8563<TwoWire> Rtc(Wire);
 #endif
 
-#if ESPS3_2_06
+/* The PCF85063 real-time clock is on the same shared I2C bus as the touch panel and the
+   AXP2101. ESPS3_1_75 carries the chip too (confirmed by the user against their board),
+   so it gets the same treatment as ESPS3_2_06: the watch reads the time from it at boot
+   and writes back whenever the phone sends a fresh sync. Without it the clock started
+   from zero on every power-up and stayed wrong until a phone connected. */
+#if ESPS3_2_06 || ESPS3_1_75
 #include <SensorPCF85063.hpp>
 SensorPCF85063 rtc;
+#endif
+
+#if ESPS3_2_06
+#include "esp_sleep.h"
+#endif
+
+// Waveshare's ESP32-S3-Touch-AMOLED-1.75 (ESPS3_1_75) also has an onboard AXP2101 PMU
+// (confirmed via Waveshare's own product docs), sharing the touch I2C bus like on
+// ESPS3_2_06 - so real battery-percent reading applies there too. The rest of
+// ESPS3_2_06's PMU-adjacent code (Extreme Power Save, its RTC) stays board-specific
+// above/below since it's tuned for that board's own touch driver and sleep circuit.
+#if ESPS3_2_06 || ESPS3_1_75
 #define XPOWERS_CHIP_AXP2101
 #include <XPowersLib.h>
 XPowersAXP2101 PMU;
 int watchBatteryPercent = 100; // last known-good AXP2101 reading, used by watch faces + settings
-#include "esp_sleep.h"
 #endif
 
 #define FLASH FFat
@@ -120,10 +136,69 @@ GyroData gyro;
 static const uint32_t screenWidth = SCREEN_WIDTH;
 static const uint32_t screenHeight = SCREEN_HEIGHT;
 
+// watch.getTime("%A"/"%b") returns English names from the underlying ESP32Time/strftime
+// implementation (not something this project can localize), so weekday/month names
+// shown on the clock face are looked up here instead, keyed off watch.getDayofWeek()
+// (0=Sun..6=Sat) and watch.getMonth() (0=Jan..11=Dec).
+static const char *ES_WEEKDAYS[7] = {"Domingo", "Lunes", "Martes", "Miércoles", "Jueves", "Viernes", "Sábado"};
+static const char *ES_MONTHS_ABBR[12] = {"ene", "feb", "mar", "abr", "may", "jun", "jul", "ago", "sep", "oct", "nov", "dic"};
+
 const unsigned int lvBufferSize = screenWidth * 80;
-uint8_t lvBuffer[2][lvBufferSize];
+// LVGL requires draw buffers aligned to LV_DRAW_BUF_ALIGN (4, per lv_conf.h) - this was
+// never explicit, so it only "worked" by the accident of wherever the linker happened
+// to place this array relative to other globals. Adding one unrelated bool variable
+// elsewhere in this file shifted that placement enough to break the accidental
+// alignment, which made lv_display_set_buffers() assert on every boot (a hard hang,
+// not a crash - the assert handler loops forever, hence a static frozen splash screen
+// no matter how many times the board was reset). Align it explicitly instead of
+// depending on layout luck.
+uint8_t lvBuffer[2][lvBufferSize] __attribute__((aligned(4)));
 
 bool weatherUpdate = true, notificationsUpdate = true, weatherUpdateFace = true;
+// Set from notificationCallback(), which runs on NimBLE's own host task, not the
+// loop() task that owns LVGL. showAlert()/feedbackRun() touch LVGL objects directly,
+// and LVGL is not thread-safe - calling them straight from the BLE task raced with
+// lv_timer_handler() running concurrently in hal_loop() and corrupted LVGL's internal
+// state (crashed the board, confirmed via serial backtrace landing inside
+// notificationCallback -> showAlert -> lv_obj_invalidate on the NimBLE host task).
+// Deferring the actual work to hal_loop() keeps all LVGL access on its owning task.
+bool alertPending = false;
+// Same rationale as alertPending, for the weather forecast/hourly list rebuild - see
+// rebuildWeatherLists() in the notificationCallback/onWeatherLoad area below.
+bool weatherListRebuildPending = false;
+// Same rationale again, for the BLE connection-state indicator - connectionCallback()
+// runs on the NimBLE host task (ChronosESP32::onConnect/onDisconnect), and touching
+// LVGL directly from there crashed reliably (confirmed via serial: lv_inv_area asserted
+// "Invalidate area is not allowed during rendering", deep in
+// connectionCallback -> lv_obj_remove_state -> lv_obj_invalidate, immediately after a
+// BLE reconnect). This was rare before Extreme Power Save started cycling BLE on every
+// screen sleep/wake - now connect/disconnect events (and this bug) are far more
+// frequent.
+bool connectionStatePending = false;
+bool pendingConnectionState = false;
+// Same rationale again, for incoming-call ringer alerts - ringerCallback() is invoked
+// from the same BLE receive path (case 0x72's ringer sub-commands in the vendored
+// ChronosESP32 library), so it has the identical thread-safety bug even though it
+// hasn't been observed crashing yet.
+bool ringerPending = false;
+bool pendingRingerState = false;
+String pendingRingerCaller = "";
+// Same rationale again, for the contacts list. configCallback() (NimBLE host task) used
+// to call setNoContacts()/clearContactList()/addContact() directly, and all three build
+// or destroy LVGL objects - the 4th instance of this exact bug in this file. Symptom seen
+// live: the board rebooting right after the phone re-sent its contacts, plus visibly
+// interleaved/garbled Serial output during the sync, which is the same two-tasks-at-once
+// race showing up in a harmless place.
+bool contactsClearPending = false;
+bool contactsRebuildPending = false;
+int pendingContactCount = 0;
+int pendingSosIndex = 0;
+/* The call screen is reused for two situations: an INCOMING call (green answer + red
+   reject) and a call the user placed from the watch's own contact list, where answering
+   makes no sense and only the red hang-up button is shown. Kept at file scope so
+   dial_contact() can reconfigure the screen that hal_setup() built. */
+lv_obj_t *ui_callAcceptButton = NULL;
+lv_obj_t *ui_callRejectButton = NULL;
 
 ChronosTimer screenTimer;
 ChronosTimer alertTimer;
@@ -144,7 +219,7 @@ bool updateSeconds = false;
 bool hasUpdatedSec = false;
 bool navSwitch = false;
 bool extremePowerSave = false;
-#if ESPS3_2_06
+#if ESPS3_2_06 || ESPS3_1_75
 bool on_battery() { return !PMU.isVbusIn(); }
 #endif
 bool touchAsleep = false; // step 4: tracks whether tft.touch.sleep() was called, so
@@ -153,6 +228,16 @@ bool touchAsleep = false; // step 4: tracks whether tft.touch.sleep() was called
 bool bleAsleep = false;   // step 5: tracks whether watch.stop() was called, so
                           // screen_on() only re-inits BLE (watch.begin()) when it
                           // was actually stopped
+
+// ESPS3_1_75: BLE is no longer stopped the moment the screen times out (that added
+// noticeable reconnect lag right when real-time navigation data started arriving,
+// forcing the user to keep the screen awake by hand during motorcycle navigation).
+// Instead it waits for this much longer, separate stretch of true inactivity - reset by
+// any touch/button press via screen_on() - before actually cutting BLE. Navigation being
+// active is already fully exempt via gameActive upstream of this check (same as the
+// rest of Extreme Power Save), so a long ride never trips this even with the screen off.
+unsigned long lastActivityMs = 0;
+const unsigned long BLE_SLEEP_INACTIVITY_MS = 60UL * 60UL * 1000UL; // 1 hour
 
 static long oldPosition = 0;
 
@@ -287,7 +372,13 @@ void my_touchpad_read(lv_indev_t *indev_driver, lv_indev_data_t *data)
 #if ESPS3_2_06
   // Step 4: don't poll a sleeping touch chip over I2C every tick - it can't
   // wake itself while extremePowerSave has it in deep sleep, only the GPIO0
-  // button can (see screen_on()).
+  // button can (see screen_on()). Deliberately NOT extended to ESPS3_1_75:
+  // LovyanGFX's Touch_CST816S driver (the one this board actually uses,
+  // shared with ESPS3_2_06 - see generic.hpp) implements wakeup()/sleep() as
+  // empty no-ops, so "sleeping" the touch chip here saved zero real power on
+  // this board while making the screen stop responding to taps until the
+  // physical button woke it - a pure UX regression with no offsetting
+  // benefit. Confirmed live and reverted per the user's choice.
   if (touchAsleep)
   {
     data->state = LV_INDEV_STATE_RELEASED;
@@ -316,19 +407,26 @@ void screen_on(long extra)
 {
   screenTimer.time = millis() + extra;
   screenTimer.active = true;
+  lastActivityMs = millis();
 
 #if ESPS3_2_06
-  // Only pay the ~200ms TouchDrvFT6X36::wakeup()/reset() cost when touch was
-  // actually put to sleep (step 4). A real touch press can't reach this
-  // function while asleep in the first place (nothing to read), so this only
-  // fires for the button/alarm wake paths, never on the ordinary touch path.
+  // Only pay the ~200ms touch chip wakeup()/reset() cost when touch was
+  // actually put to sleep (step 4, ESPS3_2_06-only - see my_touchpad_read()).
+  // A real touch press can't reach this function while asleep in the first
+  // place (nothing to read), so this only fires for the button/alarm wake
+  // paths, never on the ordinary touch path.
   if (touchAsleep)
   {
     tft.touch.wakeup();
     touchAsleep = false;
   }
+#endif
 
-  // Step 5: restart BLE the same way - only when it was actually stopped.
+#if ESPS3_2_06 || ESPS3_1_75
+  // Step 5: restart BLE the same way - only when it was actually stopped. On
+  // ESPS3_1_75 this now only ever happens after the long BLE_SLEEP_INACTIVITY_MS
+  // window (see hal_loop()), not on every screen timeout - so this fires far less
+  // often here than on ESPS3_2_06, but the restart mechanism itself is identical.
   if (bleAsleep)
   {
     watch.begin();
@@ -343,13 +441,17 @@ void screen_on(long extra)
    branch is untouched, it just keeps working since we don't touch
    screenTimer.active/duration here, only skip the expiry check). Genuinely
    irrelevant on boards without the AXP2101 (no VBUS sensing there), so this
-   always reads false off ESPS3_2_06 and every other board's behavior is
-   byte-for-byte unchanged. */
+   always reads false off ESPS3_2_06/ESPS3_1_75 and every other board's
+   behavior is byte-for-byte unchanged. */
 bool staying_on_for_charging()
 {
 #if ESPS3_2_06
   return extremePowerSave && !on_battery();
 #else
+  /* Deliberately NOT enabled for ESPS3_1_75 any more: keeping this AMOLED lit
+     indefinitely while charging made the board run noticeably warm, which isn't a
+     trade the user wants. The screen now follows its normal inactivity timeout
+     whether charging or on battery. */
   return false;
 #endif
 }
@@ -1092,6 +1194,27 @@ void simonTone(int type, int pitch)
 void connectionCallback(bool state)
 {
   Timber.d(state ? "Connected" : "Disconnected");
+  pendingConnectionState = state;
+  connectionStatePending = true;
+}
+
+// Runs on the loop task (owner of LVGL), driven by contactsRebuildPending.
+void rebuildContactList()
+{
+  Serial.print("Contacts received: ");
+  Serial.println(pendingContactCount);
+
+  clearContactList();
+
+  for (int i = 0; i < pendingContactCount; i++)
+  {
+    Contact cn = watch.getContact(i);
+    addContact(cn.name.c_str(), cn.number.c_str(), pendingSosIndex == i);
+  }
+}
+
+void applyConnectionState(bool state)
+{
   if (state)
   {
     lv_obj_remove_state(ui_btStateButton, LV_STATE_CHECKED);
@@ -1100,10 +1223,17 @@ void connectionCallback(bool state)
   {
     lv_obj_add_state(ui_btStateButton, LV_STATE_CHECKED);
   }
-  lv_label_set_text_fmt(ui_appConnectionText, "Status\n%s", state ? "Connected" : "Disconnected");
+  lv_label_set_text_fmt(ui_appConnectionText, "Estado\n%s", state ? "Conectado" : "Desconectado");
 }
 
 void ringerCallback(String caller, bool state)
+{
+  pendingRingerCaller = caller;
+  pendingRingerState = state;
+  ringerPending = true;
+}
+
+void applyRingerState(String caller, bool state)
 {
   lv_disp_t *display = lv_display_get_default();
   lv_obj_t *actScr = lv_display_get_screen_active(display);
@@ -1116,6 +1246,17 @@ void ringerCallback(String caller, bool state)
     lastActScr = actScr;
     Serial.print("Ringer: Incoming call from ");
     Serial.println(caller);
+    /* Restore the two-button "incoming" layout - dial_contact() may have left the screen
+       configured for an outgoing call (answer button hidden, hang-up centred). */
+    lv_label_set_text(ui_callLabel, "Llamada entrante");
+    if (ui_callAcceptButton)
+    {
+      lv_obj_remove_flag(ui_callAcceptButton, LV_OBJ_FLAG_HIDDEN);
+    }
+    if (ui_callRejectButton)
+    {
+      lv_obj_set_x(ui_callRejectButton, UI_SCALE_PX(-45));
+    }
     lv_label_set_text(ui_callName, caller.c_str());
     lv_screen_load_anim(ui_callScreen, LV_SCR_LOAD_ANIM_FADE_IN, 500, 0, false);
   }
@@ -1134,12 +1275,11 @@ void ringerCallback(String caller, bool state)
 
 void notificationCallback(Notification notification)
 {
-  Timber.d("Notification Received from %s at %s", notification.app.c_str(), notification.time.c_str());
-  Timber.d(notification.message.c_str());
   notificationsUpdate = true;
   // onNotificationsOpen(click);
-  feedbackRun(T_NOTIFICATION);
-  showAlert();
+  // feedbackRun()/showAlert() touch LVGL and must run on the loop() task - see
+  // alertPending's declaration. hal_loop() picks this up and does the actual work.
+  alertPending = true;
 }
 
 void configCallback(Config config, uint32_t a, uint32_t b)
@@ -1154,7 +1294,7 @@ void configCallback(Config config, uint32_t a, uint32_t b)
 
 #endif
 
-#if ESPS3_2_06
+#if ESPS3_2_06 || ESPS3_1_75
     rtc.setDateTime(watch.getYear(), watch.getMonth() + 1, watch.getDay(), watch.getHour(true), watch.getMinute(), watch.getSecond());
 #endif
     // ui_update_seconds(watch.getSecond());
@@ -1241,7 +1381,7 @@ void configCallback(Config config, uint32_t a, uint32_t b)
     Serial.print(a); // int code = watch.getAppCode();
     Serial.print(" Version: ");
     Serial.println(watch.getAppVersion());
-    lv_label_set_text_fmt(ui_appDetailsText, "Chronos app\nv%s (%d)", watch.getAppVersion().c_str(), a);
+    lv_label_set_text_fmt(ui_appDetailsText, "App conectada\nv%s (%d)", watch.getAppVersion().c_str(), a);
     break;
   case CF_QR:
     if (a == 1)
@@ -1260,33 +1400,18 @@ void configCallback(Config config, uint32_t a, uint32_t b)
     }
     break;
   case CF_CONTACT:
+    // Defer both the "clear" and the "rebuild" to hal_loop() - see the flags' declaration
+    // for why. The contact data itself is already fully stored in the library's own
+    // buffer by the time a==1 fires, so reading it a few milliseconds later is fine.
     if (a == 0)
     {
-      Serial.println("Receiving contacts");
-      Serial.print("SOS index: ");
-      Serial.print(uint8_t(b >> 8));
-      Serial.print("\tSize: ");
-      Serial.println(uint8_t(b));
-      setNoContacts();
+      contactsClearPending = true;
     }
     if (a == 1)
     {
-      Serial.println("Received all contacts");
-      int n = uint8_t(b);      // contacts size -> watch.getContactCount();
-      int s = uint8_t(b >> 8); // sos contact index -> watch.getSOSContactIndex();
-
-      clearContactList();
-
-      for (int i = 0; i < n; i++)
-      {
-        Contact cn = watch.getContact(i);
-        Serial.print("Name: ");
-        Serial.print(cn.name);
-        Serial.print(s == i ? " [SOS]" : "");
-        Serial.print("\tNumber: ");
-        Serial.println(cn.number);
-        addContact(cn.name.c_str(), cn.number.c_str(), s == i);
-      }
+      pendingContactCount = uint8_t(b);      // watch.getContactCount()
+      pendingSosIndex = uint8_t(b >> 8);     // watch.getSOSContactIndex()
+      contactsRebuildPending = true;
     }
     break;
   }
@@ -1404,6 +1529,76 @@ void onNotificationsOpen(lv_event_t *e)
   lv_obj_add_flag(ui_messagePanel, LV_OBJ_FLAG_HIDDEN);
 }
 
+void onClearNotifications(lv_event_t *e)
+{
+  watch.clearNotifications();
+  notificationsUpdate = false;
+  lv_obj_clean(ui_messageList);
+  lv_obj_add_flag(ui_messageList, LV_OBJ_FLAG_HIDDEN);
+  lv_obj_remove_flag(ui_messagePanel, LV_OBJ_FLAG_HIDDEN);
+}
+
+// Custom watch->phone command for the call accept/reject buttons - reuses
+// ChronosESP32::sendCommand() (the same raw-notify mechanism musicControl() and
+// setVolume() already use, see their implementations in ChronosESP32.cpp) with a hi/lo
+// pair (0xC1) that doesn't collide with the library's own reserved music/volume Control
+// enum (0x9D**/0x99**). No changes to the vendored library needed - this is entirely a
+// phone-side (ChronosProtocol.kt/ChronosBleService.kt) + firmware-side (here) agreement,
+// mirroring the exact 7-byte format decodeWatchCommand() already expects.
+void sendCallAction(bool accept)
+{
+  uint8_t cmd[] = {0xAB, 0x00, 0x04, 0xFF, 0xC1, 0x80, (uint8_t)(accept ? 0x01 : 0x02)};
+  watch.sendCommand(cmd, 7);
+}
+
+// Same raw-notify mechanism as sendCallAction(), with its own hi byte (0xC2) so the
+// phone can tell "dial contact N" apart from accept/reject. lo carries the contact
+// index, which is why CONTACTS_SIZE (255) conveniently fits in one byte.
+void dial_contact(int index)
+{
+  if (index < 0 || index > 0xFF)
+  {
+    return;
+  }
+  uint8_t cmd[] = {0xAB, 0x00, 0x04, 0xFF, 0xC2, 0x80, (uint8_t)index};
+  watch.sendCommand(cmd, 7);
+
+  /* Show the call screen in "outgoing" form so the call can be hung up from here: same
+     screen as an incoming call, but the green answer button is hidden - there is nothing
+     to answer. The red button already maps to endCall() on the phone, which Android uses
+     both to reject a ringing call and to end an active one, so it needs no new command. */
+  Contact cn = watch.getContact(index);
+  lv_label_set_text(ui_callLabel, "Llamando");
+  lv_label_set_text(ui_callName, cn.name.c_str());
+  if (ui_callAcceptButton)
+  {
+    lv_obj_add_flag(ui_callAcceptButton, LV_OBJ_FLAG_HIDDEN);
+  }
+  if (ui_callRejectButton)
+  {
+    /* Centre the hang-up button while it is the only one on screen. */
+    lv_obj_set_x(ui_callRejectButton, 0);
+  }
+
+  lv_disp_t *display = lv_display_get_default();
+  lastActScr = lv_display_get_screen_active(display);
+  screenTimer.time = millis() + 50;
+  screenTimer.active = true;
+  lv_screen_load_anim(ui_callScreen, LV_SCR_LOAD_ANIM_FADE_IN, 500, 0, false);
+}
+
+void onCallAccept(lv_event_t *e)
+{
+  sendCallAction(true);
+  lv_screen_load_anim(ui_home, LV_SCR_LOAD_ANIM_FADE_OUT, 500, 0, false);
+}
+
+void onCallReject(lv_event_t *e)
+{
+  sendCallAction(false);
+  lv_screen_load_anim(ui_home, LV_SCR_LOAD_ANIM_FADE_OUT, 500, 0, false);
+}
+
 void onWeatherLoad(lv_event_t *e)
 {
   lv_obj_remove_flag(ui_weatherPanel, LV_OBJ_FLAG_HIDDEN);
@@ -1414,6 +1609,21 @@ void onWeatherLoad(lv_event_t *e)
   {
     return;
   }
+  // Deferred to hal_loop() - see rebuildWeatherLists()'s comment for why. Rebuilding
+  // these lists directly from here crashed reliably (Guru Meditation LoadProhibited,
+  // deep in lv_obj_clean -> lv_event_mark_deleted) the first time real weather data
+  // ever populated the list.
+  weatherListRebuildPending = true;
+}
+
+// See onWeatherLoad(): this used to run inline from there, but that's called from
+// inside an active lv_event_send() dispatch (LV_EVENT_SCREEN_LOAD_START) - deleting
+// objects (lv_obj_clean) while already nested inside LVGL's own event dispatch crashed
+// reliably. Calling it from the top of hal_loop() instead - not nested inside any LVGL
+// event - fixed it, matching the same fix already applied to the WhatsApp-notification
+// crash (see alertPending).
+void rebuildWeatherLists()
+{
   weatherUpdate = false;
 
   if (watch.getWeatherCount() > 0)
@@ -2089,7 +2299,7 @@ void hal_setup()
 
   ui_init();
 
-#if ESPS3_2_06
+#if ESPS3_2_06 || ESPS3_1_75
   lv_obj_remove_flag(ui_batterySlider, LV_OBJ_FLAG_CLICKABLE); // real PMU reading, not a fake-level debug control
 #endif
 
@@ -2169,7 +2379,7 @@ void hal_setup()
   address.toUpperCase();
   String qrCode = "{\"Name\":\"" + chip + "\", \"Mac\":\"" + address + "\"}";
   lv_qrcode_update(ui_connectImage, qrCode.c_str(), qrCode.length());
-  lv_label_set_text(ui_connectText, "Scan to connect");
+  lv_label_set_text(ui_connectText, "Escanea para conectar");
 #endif
   // bool intro = prefs.getBool("intro", true);
 
@@ -2234,7 +2444,12 @@ void hal_setup()
   }
 #endif
 
-#if ESPS3_2_06
+// The switch itself and its click handler (onExtremePowerSave()) already run on every
+// board - only the actual power-save behavior (steps 3-6) stays gated to specific
+// boards below. This boot-time restore just needs the same board list so the switch
+// correctly reflects its saved on/off state after a restart, instead of always
+// starting unchecked.
+#if ESPS3_2_06 || ESPS3_1_75
   if (extremePowerSave)
   {
     lv_obj_add_state(ui_extremePowerSaveSwitch, LV_STATE_CHECKED);
@@ -2247,6 +2462,9 @@ void hal_setup()
 
   screenTimer.active = true;
   screenTimer.time = millis();
+  lastActivityMs = millis(); // boot counts as activity - otherwise this starts at 0 and
+                             // the 1-hour BLE-sleep check would fire on the very first
+                             // hal_loop() iteration (millis() - 0 already exceeds it).
 
   setTimeout(tm);
 
@@ -2289,16 +2507,35 @@ void hal_setup()
   Rtc.SetSquareWavePin(PCF8563SquareWavePinMode_None);
 #endif
 
-#if ESPS3_2_06
+#if ESPS3_2_06 || ESPS3_1_75
+  /* Runs after tft.init(), which is what actually brings up the shared I2C bus with the
+     touch pins - the RTC, the touch controller and the AXP2101 all live on it. */
   if (!rtc.begin(Wire))
 	{
 		Timber.e("Failed to find PCF85063 - check your wiring!");
 	}
-  RTC_DateTime dt = rtc.getDateTime();
-	watch.setTime(dt.getSecond(), dt.getMinute(), dt.getHour(), dt.getDay(), dt.getMonth(), dt.getYear());
-	rtc.resetAlarm();
-	rtc.disableAlarm();
+  else
+  {
+    RTC_DateTime dt = rtc.getDateTime();
+    /* A chip that has never been set reads back as year 2000 or similar. Showing that
+       would be worse than showing nothing, so only trust a plausible date and otherwise
+       just wait for the phone's first time sync (which then writes the RTC). */
+    if (dt.getYear() >= 2024)
+    {
+      watch.setTime(dt.getSecond(), dt.getMinute(), dt.getHour(), dt.getDay(), dt.getMonth(), dt.getYear());
+      Timber.i("Time restored from RTC: %04d-%02d-%02d %02d:%02d:%02d",
+               dt.getYear(), dt.getMonth(), dt.getDay(), dt.getHour(), dt.getMinute(), dt.getSecond());
+    }
+    else
+    {
+      Timber.w("RTC has no valid time yet (year %d) - waiting for phone sync", dt.getYear());
+    }
+    rtc.resetAlarm();
+    rtc.disableAlarm();
+  }
+#endif
 
+#if ESPS3_2_06 || ESPS3_1_75
   if (!PMU.init(Wire, TOUCH_SDA, TOUCH_SCL, AXP2101_SLAVE_ADDRESS))
   {
     Timber.e("Failed to find AXP2101 - check your wiring!");
@@ -2312,7 +2549,7 @@ void hal_setup()
       watchBatteryPercent = pct;
       watch.setBattery(pct, PMU.isCharging());
       lv_slider_set_value(ui_batterySlider, watchBatteryPercent, LV_ANIM_OFF);
-      lv_label_set_text_fmt(ui_batteryLabel, "Battery %d%%", watchBatteryPercent);
+      lv_label_set_text_fmt(ui_batteryLabel, "Batería %d%%", watchBatteryPercent);
     }
   }
 #endif
@@ -2332,7 +2569,83 @@ void hal_setup()
   lv_obj_set_height(info, LV_SIZE_CONTENT); /// 1
   lv_label_set_long_mode(info, LV_LABEL_LONG_WRAP);
   lv_obj_set_style_text_font(info, &lv_font_montserrat_14, LV_PART_MAIN | LV_STATE_DEFAULT);
-  lv_label_set_text(info, "No notifications available. Connect Chronos app to receive phone notifications");
+  lv_label_set_text(info, "No hay notificaciones disponibles. Conecta el reloj con la app Chronos Companion en tu celular");
+
+  // Positioned top-mid (not top-right) with a modest offset: this is a round display,
+  // so a literal screen corner (e.g. TOP_RIGHT with a small inset) falls outside the
+  // visible circular area and is clipped by the bezel - unlike a rectangular screen,
+  // "near the top and off to one side" only stays visible if it hugs the vertical
+  // center line. Also kept above y=50 (the notification list's own top padding, see
+  // ui_messageList's pad_top in ui.c) so it never sits under the first list item.
+  lv_obj_t *ui_clearNotifications = lv_image_create(ui_notificationScreen);
+  lv_image_set_src(ui_clearNotifications, &ui_img_bin_png);
+  lv_obj_set_width(ui_clearNotifications, LV_SIZE_CONTENT);
+  lv_obj_set_height(ui_clearNotifications, LV_SIZE_CONTENT);
+  lv_obj_set_align(ui_clearNotifications, LV_ALIGN_TOP_MID);
+  lv_obj_set_x(ui_clearNotifications, UI_SCALE_PX(44));
+  lv_obj_set_y(ui_clearNotifications, UI_SCALE_PX(10));
+  lv_obj_add_flag(ui_clearNotifications, LV_OBJ_FLAG_CLICKABLE);
+  lv_obj_add_flag(ui_clearNotifications, LV_OBJ_FLAG_ADV_HITTEST);
+  lv_obj_remove_flag(ui_clearNotifications, LV_OBJ_FLAG_SCROLLABLE);
+  lv_obj_add_event_cb(ui_clearNotifications, onClearNotifications, LV_EVENT_CLICKED, NULL);
+
+  // Incoming-call accept/reject buttons. ui_callScreen already existed (icon + caller
+  // name label, from the original template) but had no way to actually control the call -
+  // swiping away just dismissed the screen locally, it never told the phone anything.
+  // Positioned low, symmetric left/right of center - round-safe the same way as
+  // ui_clearNotifications above: at this height (~150px below screen center on this
+  // 466px round display) the visible circle is wide enough for two buttons this size
+  // with margin to spare.
+  ui_callAcceptButton = lv_obj_create(ui_callScreen);
+  lv_obj_set_width(ui_callAcceptButton, UI_SCALE_PX(64));
+  lv_obj_set_height(ui_callAcceptButton, UI_SCALE_PX(64));
+  lv_obj_set_align(ui_callAcceptButton, LV_ALIGN_BOTTOM_MID);
+  lv_obj_set_x(ui_callAcceptButton, UI_SCALE_PX(45));
+  lv_obj_set_y(ui_callAcceptButton, UI_SCALE_PX(-40));
+  lv_obj_set_style_radius(ui_callAcceptButton, LV_RADIUS_CIRCLE, LV_PART_MAIN | LV_STATE_DEFAULT);
+  lv_obj_set_style_bg_color(ui_callAcceptButton, lv_color_hex(0x2ECC71), LV_PART_MAIN | LV_STATE_DEFAULT);
+  lv_obj_set_style_bg_opa(ui_callAcceptButton, 255, LV_PART_MAIN | LV_STATE_DEFAULT);
+  lv_obj_set_style_border_width(ui_callAcceptButton, 0, LV_PART_MAIN | LV_STATE_DEFAULT);
+  lv_obj_remove_flag(ui_callAcceptButton, LV_OBJ_FLAG_SCROLLABLE);
+  lv_obj_add_flag(ui_callAcceptButton, LV_OBJ_FLAG_CLICKABLE);
+  lv_obj_add_event_cb(ui_callAcceptButton, onCallAccept, LV_EVENT_CLICKED, NULL);
+
+  lv_obj_t *ui_callAcceptIcon = lv_image_create(ui_callAcceptButton);
+  lv_image_set_src(ui_callAcceptIcon, &ui_img_answer_png);
+  lv_obj_set_align(ui_callAcceptIcon, LV_ALIGN_CENTER);
+  lv_obj_remove_flag(ui_callAcceptIcon, LV_OBJ_FLAG_SCROLLABLE);
+  lv_obj_add_flag(ui_callAcceptIcon, LV_OBJ_FLAG_ADV_HITTEST);
+
+  ui_callRejectButton = lv_obj_create(ui_callScreen);
+  lv_obj_set_width(ui_callRejectButton, UI_SCALE_PX(64));
+  lv_obj_set_height(ui_callRejectButton, UI_SCALE_PX(64));
+  lv_obj_set_align(ui_callRejectButton, LV_ALIGN_BOTTOM_MID);
+  lv_obj_set_x(ui_callRejectButton, UI_SCALE_PX(-45));
+  lv_obj_set_y(ui_callRejectButton, UI_SCALE_PX(-40));
+  lv_obj_set_style_radius(ui_callRejectButton, LV_RADIUS_CIRCLE, LV_PART_MAIN | LV_STATE_DEFAULT);
+  lv_obj_set_style_bg_color(ui_callRejectButton, lv_color_hex(0xE74C3C), LV_PART_MAIN | LV_STATE_DEFAULT);
+  lv_obj_set_style_bg_opa(ui_callRejectButton, 255, LV_PART_MAIN | LV_STATE_DEFAULT);
+  lv_obj_set_style_border_width(ui_callRejectButton, 0, LV_PART_MAIN | LV_STATE_DEFAULT);
+  lv_obj_remove_flag(ui_callRejectButton, LV_OBJ_FLAG_SCROLLABLE);
+  lv_obj_add_flag(ui_callRejectButton, LV_OBJ_FLAG_CLICKABLE);
+  lv_obj_add_event_cb(ui_callRejectButton, onCallReject, LV_EVENT_CLICKED, NULL);
+
+  lv_obj_t *ui_callRejectLabel = lv_label_create(ui_callRejectButton);
+  lv_label_set_text(ui_callRejectLabel, LV_SYMBOL_CLOSE);
+  lv_obj_set_style_text_font(ui_callRejectLabel, &lv_font_montserrat_20, LV_PART_MAIN | LV_STATE_DEFAULT);
+  lv_obj_center(ui_callRejectLabel);
+
+  // Re-space the two labels the template placed above (ui.c's ui_callScreen_screen_init):
+  // the caller name sat at y=169 (=328px here), which lands right inside the 264..388px
+  // band the buttons above now occupy, so the name rendered behind them. Pull it up, and
+  // lift the phone icon by the same idea to keep the four elements evenly spread:
+  //   "Llamada entrante" 68..88, icon 101..165, name 179..223, buttons 264..388.
+  // Done here rather than in ui.c so the template stays untouched and this stays one
+  // coherent unit with the buttons that caused the conflict. Values are tuned against
+  // this board's 466x466 panel; the icon is a fixed 64px asset that doesn't scale with
+  // UI_SCALE_PX, so smaller panels would need their own tuning.
+  lv_obj_set_y(ui_callIcon, UI_SCALE_PX(52));
+  lv_obj_set_y(ui_callName, UI_SCALE_PX(92));
 
 #if !defined(BUZZER_PIN) || (BUZZER_PIN == -1)
   lv_obj_add_state(ui_soundsAlert, LV_STATE_DISABLED);
@@ -2355,6 +2668,8 @@ void hal_setup()
 #endif
 
   Serial.println(heapUsage());
+  Serial.printf("[PSRAM] size=%u free=%u\n",
+                (unsigned)ESP.getPsramSize(), (unsigned)ESP.getFreePsram());
 
   Timber.i("Setup done");
   Timber.i(about.c_str());
@@ -2369,8 +2684,85 @@ void hal_loop()
   }
 #endif
 
+  /* Heap watch. LVGL is configured with LV_USE_STDLIB_MALLOC = LV_STDLIB_CLIB, so every
+     UI object (including the watch face labels rewritten every second) allocates from the
+     same system heap the BLE stack needs - and only ~31 KB of it is free at boot. After
+     ~7.7 hours of uptime that heap could no longer satisfy BLE ("BLE_INIT: Malloc failed"
+     on serial), so the watch accepted connections but could not complete GATT service
+     discovery, and the phone dropped it after 15s (status=22) over and over. A reboot
+     cleared it completely.
+     Both a slow leak and fragmentation fit those symptoms, and they need different fixes,
+     so log the numbers instead of guessing: `free` falling steadily means a leak, while
+     `free` holding roughly flat while `maxAlloc` (largest contiguous block) shrinks means
+     fragmentation. */
+  static unsigned long lastHeapLog = 0;
+  if (millis() - lastHeapLog >= 300000UL) // every 5 minutes
+  {
+    lastHeapLog = millis();
+    // psram* is here to size up the real fix: the board definition (lolin_s3_pro.json)
+    // already sets -DBOARD_HAS_PSRAM with OPI PSRAM, but LVGL allocates through plain
+    // malloc(), which on Arduino-ESP32 serves internal RAM only. If PSRAM really is
+    // present, pointing LVGL's allocator at it moves every screen/label/style off the
+    // 192 KB internal heap that BLE also depends on.
+    Serial.printf("[HEAP] up=%lus free=%u maxAlloc=%u minEver=%u | psramSize=%u psramFree=%u\n",
+                  millis() / 1000UL,
+                  (unsigned)ESP.getFreeHeap(),
+                  (unsigned)ESP.getMaxAllocHeap(),
+                  (unsigned)ESP.getMinFreeHeap(),
+                  (unsigned)ESP.getPsramSize(),
+                  (unsigned)ESP.getFreePsram());
+  }
+
   if (!transfer)
   {
+    if (alertPending)
+    {
+      alertPending = false;
+      feedbackRun(T_NOTIFICATION);
+      showAlert();
+    }
+
+    // New weather can land while the user is already sitting on the weather screen.
+    // onWeatherLoad() only runs on LV_EVENT_SCREEN_LOAD_START, so without this the screen
+    // keeps showing the old values until they navigate away and back - confirmed on
+    // hardware, and the reason the weather looked "stuck" even though the phone's log
+    // showed every packet delivered. rebuildWeatherLists() clears weatherUpdate itself,
+    // so this can't retrigger in a loop.
+    if (weatherUpdate && lv_screen_active() == ui_weatherScreen)
+    {
+      weatherListRebuildPending = true;
+    }
+
+    if (weatherListRebuildPending)
+    {
+      weatherListRebuildPending = false;
+      rebuildWeatherLists();
+    }
+
+    if (connectionStatePending)
+    {
+      connectionStatePending = false;
+      applyConnectionState(pendingConnectionState);
+    }
+
+    if (ringerPending)
+    {
+      ringerPending = false;
+      applyRingerState(pendingRingerCaller, pendingRingerState);
+    }
+
+    if (contactsClearPending)
+    {
+      contactsClearPending = false;
+      setNoContacts();
+    }
+
+    if (contactsRebuildPending)
+    {
+      contactsRebuildPending = false;
+      rebuildContactList();
+    }
+
     lv_timer_handler(); // Update the UI-
     delay(5);
 
@@ -2406,9 +2798,10 @@ void hal_loop()
     if (ui_home == ui_clockScreen)
     {
       lv_label_set_text(ui_hourLabel, watch.getHourZ().c_str());
-      lv_label_set_text(ui_dayLabel, watch.getTime("%A").c_str());
+      lv_label_set_text(ui_dayLabel, ES_WEEKDAYS[watch.getDayofWeek()]);
       lv_label_set_text(ui_minuteLabel, watch.getTime("%M").c_str());
-      lv_label_set_text(ui_dateLabel, watch.getTime("%d\n%b").c_str());
+      String dateStr = watch.getTime("%d\n") + String(ES_MONTHS_ABBR[watch.getMonth()]);
+      lv_label_set_text(ui_dateLabel, dateStr.c_str());
       lv_label_set_text(ui_amPmLabel, watch.getAmPmC(false).c_str());
     }
     else
@@ -2492,12 +2885,13 @@ void hal_loop()
             setNavIconPx(x, y, px_on);
           }
         }
+        navIconRefresh();
       }
     }
 
     if (actScr == ui_appInfoScreen)
     {
-      lv_label_set_text_fmt(ui_appBatteryText, "Battery - %d%%", watch.getPhoneBattery());
+      lv_label_set_text_fmt(ui_appBatteryText, "Batería - %d%%", watch.getPhoneBattery());
       lv_bar_set_value(ui_appBatteryLevel, watch.getPhoneBattery(), LV_ANIM_OFF);
       if (watch.isPhoneCharging())
       {
@@ -2518,7 +2912,7 @@ void hal_loop()
       }
     }
 
-#if ESPS3_2_06
+#if ESPS3_2_06 || ESPS3_1_75
     {
       static unsigned long lastBatteryPoll = 0;
       if (millis() - lastBatteryPoll >= 30000)
@@ -2530,7 +2924,7 @@ void hal_loop()
           watchBatteryPercent = pct;
           watch.setBattery(pct, PMU.isCharging());
           lv_slider_set_value(ui_batterySlider, watchBatteryPercent, LV_ANIM_OFF);
-          lv_label_set_text_fmt(ui_batteryLabel, "Battery %d%%", watchBatteryPercent);
+          lv_label_set_text_fmt(ui_batteryLabel, "Batería %d%%", watchBatteryPercent);
         }
       }
     }
@@ -2561,22 +2955,52 @@ void hal_loop()
 #if ESPS3_2_06
         // Step 4: sleep the touch chip too, gated the same way as the rest of Extreme
         // Power Save - only while the switch is on and genuinely on battery.
+        // ESPS3_2_06-only - see my_touchpad_read() for why this isn't extended to
+        // ESPS3_1_75 (no-op wakeup()/sleep() on that board's touch driver).
         if (extremePowerSave && on_battery())
         {
           tft.touch.sleep();
           touchAsleep = true;
+        }
+#endif
 
-          // Step 5: stop BLE entirely too - clearAll=true (the default) is
-          // correct here since begin() below will recreate the server/
-          // advertising objects from scratch; bonding/pairing info lives in
-          // the NimBLE host's own store, untouched by deinit either way, so
-          // the phone's existing pairing should survive this cycle.
+#if ESPS3_2_06
+        // Step 5: stop BLE entirely too - clearAll=true (the default) is
+        // correct here since begin() below will recreate the server/
+        // advertising objects from scratch; bonding/pairing info lives in
+        // the NimBLE host's own store, untouched by deinit either way, so
+        // the phone's existing pairing should survive this cycle.
+        // Deliberately NOT extended to ESPS3_1_75: the user relies on this watch
+        // for real-time motorcycle navigation, and BLE needing to reconnect after
+        // being stopped added noticeable lag right when navigation data started
+        // arriving - had to babysit the screen to keep it awake so BLE wouldn't
+        // drop. Not worth the tradeoff for this board/use case, even though the
+        // connect/disconnect crash itself (connectionCallback, see git history)
+        // is now fixed regardless of whether this step is active.
+        if (extremePowerSave && on_battery())
+        {
           watch.stop(true);
           bleAsleep = true;
         }
 #endif
       }
     }
+
+#if ESPS3_1_75
+    // ESPS3_1_75's own, much longer BLE-sleep trigger - independent of screenTimer.active
+    // (which goes false once the screen has already timed out, so it can't live inside
+    // that block above). Only actually stops BLE after a full hour of true inactivity;
+    // any touch/button press resets lastActivityMs via screen_on(), and navigation being
+    // active is already exempt via gameActive. See lastActivityMs's declaration for why
+    // this exists instead of just extending ESPS3_2_06's step 5 to this board.
+    if (extremePowerSave && on_battery() && !bleAsleep && !gameActive &&
+        millis() - lastActivityMs >= BLE_SLEEP_INACTIVITY_MS)
+    {
+      Timber.w("Long inactivity - stopping BLE");
+      watch.stop(true);
+      bleAsleep = true;
+    }
+#endif
   }
 
 #ifdef ENABLE_CUSTOM_FACE
@@ -2675,7 +3099,7 @@ void update_faces()
   int temp = watch.getWeatherAt(0).temp;
   int icon = watch.getWeatherAt(0).icon;
 
-#if ESPS3_2_06
+#if ESPS3_2_06 || ESPS3_1_75
   int battery = watchBatteryPercent;
 #else
   int battery = watch.getPhoneBattery();

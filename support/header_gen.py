@@ -22,4 +22,4 @@ with open(output_file, "w") as f:
                     rel_path = os.path.join(root, file).replace("\\", "/").replace("src/", "../")
                     f.write(f'#include "{rel_path}"\n')
 
-print(f"🔄 Generated: {output_file}")
+print(f"Generated: {output_file}")

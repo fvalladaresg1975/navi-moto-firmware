@@ -194,7 +194,7 @@ void update_status_tix_resized(int battery, bool connection){
     {
         return;
     }
-	lv_image_set_src(face_tix_resized_5_152184, face_tix_resized_dial_img_5_152184_group[(battery / (100 / 7)) % 7]);
+	{ int battLevel = battery / (100 / 7); if (battLevel > 6) battLevel = 6; lv_image_set_src(face_tix_resized_5_152184, face_tix_resized_dial_img_5_152184_group[battLevel]); }
 
 #endif
 }

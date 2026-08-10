@@ -28,7 +28,7 @@ bool is_player_turn = false;
 int highScoreSimon;
 
 
-REGISTER_APP("Simon Says", &ui_img_colors_png, ui_simonScreen, ui_simonScreen_screen_init);
+REGISTER_APP("Simón Dice", &ui_img_colors_png, ui_simonScreen, ui_simonScreen_screen_init);
 
 lv_obj_t *ui_simonMainPanel;
 lv_obj_t *ui_simonScorePanel;
@@ -85,8 +85,8 @@ void ui_event_simonScreen(lv_event_t *e)
 
         highScoreSimon = getPrefInt("simon_high", 0);
 
-        lv_label_set_text(ui_simonButtonText, "Start");
-        lv_label_set_text(ui_simonLabel, "High Score");
+        lv_label_set_text(ui_simonButtonText, "Iniciar");
+        lv_label_set_text(ui_simonLabel, "Puntaje máximo");
         lv_label_set_text(ui_simonInfo, "");
         lv_label_set_text(ui_simonScoreText, "0");
         lv_label_set_text_fmt(ui_simonScore, "%d", highScoreSimon);
@@ -170,7 +170,7 @@ void panel_event_handler(lv_event_t *e)
         if (div == 0){
             div = 1; // prevent divide by zero
         }
-        lv_label_set_text(ui_simonLabel, "Game Over!");
+        lv_label_set_text(ui_simonLabel, "¡Fin del juego!");
         lv_label_set_text(ui_simonLabel, levels[(int)((current_sequence_length - 1) / div)].title);
         lv_label_set_text(ui_simonInfo, levels[(int)((current_sequence_length - 1) / div)].message);
 
@@ -199,7 +199,7 @@ void panel_event_handler(lv_event_t *e)
 
             highScoreSimon = current_sequence_length;
             lv_label_set_text_fmt(ui_simonScore, "%d", highScoreSimon);
-            // lv_label_set_text(ui_simonLabel, "You Win!");
+            // lv_label_set_text(ui_simonLabel, "¡Ganaste!");
             lv_label_set_text(ui_simonLabel, levels[10].title);
             lv_label_set_text(ui_simonInfo, levels[10].message);
 
@@ -413,7 +413,7 @@ void ui_simonScreen_screen_init()
     lv_obj_set_width(ui_simonTitle, 150);
     lv_obj_set_height(ui_simonTitle, LV_SIZE_CONTENT); /// 1
     lv_obj_set_align(ui_simonTitle, LV_ALIGN_CENTER);
-    lv_label_set_text(ui_simonTitle, "Simon Says");
+    lv_label_set_text(ui_simonTitle, "Simón Dice");
     lv_obj_set_style_text_align(ui_simonTitle, LV_TEXT_ALIGN_CENTER, LV_PART_MAIN | LV_STATE_DEFAULT);
     lv_obj_set_style_text_font(ui_simonTitle, &lv_font_montserrat_20, LV_PART_MAIN | LV_STATE_DEFAULT);
     lv_obj_set_style_border_color(ui_simonTitle, lv_color_hex(0xFFFFFF), LV_PART_MAIN | LV_STATE_DEFAULT);
@@ -425,7 +425,7 @@ void ui_simonScreen_screen_init()
     lv_obj_set_width(ui_simonLabel, LV_SIZE_CONTENT);  /// 1
     lv_obj_set_height(ui_simonLabel, LV_SIZE_CONTENT); /// 1
     lv_obj_set_align(ui_simonLabel, LV_ALIGN_CENTER);
-    lv_label_set_text(ui_simonLabel, "Your Score");
+    lv_label_set_text(ui_simonLabel, "Tu puntaje");
     lv_obj_set_style_text_font(ui_simonLabel, &lv_font_montserrat_16, LV_PART_MAIN | LV_STATE_DEFAULT);
 
     ui_simonScore = lv_label_create(ui_simonPanel);
@@ -441,7 +441,7 @@ void ui_simonScreen_screen_init()
     lv_obj_set_width(ui_simonInfo, 180);              /// 1
     lv_obj_set_height(ui_simonInfo, LV_SIZE_CONTENT); /// 1
     lv_obj_set_align(ui_simonInfo, LV_ALIGN_CENTER);
-    lv_label_set_text(ui_simonInfo, "Start");
+    lv_label_set_text(ui_simonInfo, "Iniciar");
     lv_obj_set_style_text_opa(ui_simonInfo, 255, LV_PART_MAIN | LV_STATE_DEFAULT);
     lv_obj_set_style_text_align(ui_simonInfo, LV_TEXT_ALIGN_CENTER, LV_PART_MAIN | LV_STATE_DEFAULT);
     lv_obj_set_style_text_font(ui_simonInfo, &lv_font_montserrat_14, LV_PART_MAIN | LV_STATE_DEFAULT);
@@ -458,7 +458,7 @@ void ui_simonScreen_screen_init()
     lv_obj_set_width(ui_simonButtonText, LV_SIZE_CONTENT);  /// 1
     lv_obj_set_height(ui_simonButtonText, LV_SIZE_CONTENT); /// 40
     lv_obj_set_align(ui_simonButtonText, LV_ALIGN_CENTER);
-    lv_label_set_text(ui_simonButtonText, "Start");
+    lv_label_set_text(ui_simonButtonText, "Iniciar");
 
     ui_exitSimon = lv_button_create(ui_simonPanel);
     lv_obj_set_width(ui_exitSimon, 100);
@@ -474,7 +474,7 @@ void ui_simonScreen_screen_init()
     lv_obj_set_width(ui_exitSimonText, LV_SIZE_CONTENT);  /// 1
     lv_obj_set_height(ui_exitSimonText, LV_SIZE_CONTENT); /// 40
     lv_obj_set_align(ui_exitSimonText, LV_ALIGN_CENTER);
-    lv_label_set_text(ui_exitSimonText, "Exit");
+    lv_label_set_text(ui_exitSimonText, "Salir");
 
     lv_obj_add_event_cb(ui_simonStart, ui_event_simonStart, LV_EVENT_ALL, NULL);
     lv_obj_add_event_cb(ui_exitSimon, ui_event_exitSimon, LV_EVENT_ALL, NULL);

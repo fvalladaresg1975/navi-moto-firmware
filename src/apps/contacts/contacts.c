@@ -6,10 +6,25 @@
 */
 
 #include "contacts.h"
+/* For UI_SCALE_PX/UI_SCALE - this app's rows were laid out in raw pixels for a 240x240
+   screen, so on the 466x466 panel everything rendered at roughly half size. ui.c pulls
+   the same header in the same way. */
+#include "../../hal/esp32/displays/pins.h"
+
+/* Fonts don't scale with UI_SCALE_PX, so bump them a step on large panels. Capped at 20:
+   14/16/18/20 come from src/fonts_es with the accented Latin-1 range, while LVGL's
+   built-in 24/30 are ASCII-only and would mangle names like "Muñoz" or "José". */
+#if UI_SCALE >= 384
+#define CONTACT_NAME_FONT &lv_font_montserrat_20
+#define CONTACT_NUMBER_FONT &lv_font_montserrat_16
+#else
+#define CONTACT_NAME_FONT &lv_font_montserrat_16
+#define CONTACT_NUMBER_FONT &lv_font_montserrat_14
+#endif
 
 #ifdef ENABLE_APP_CONTACTS
 
-REGISTER_APP("Contacts", &ui_img_contact_list_png, ui_contactScreen, ui_contactScreen_screen_init);
+REGISTER_APP("Contactos", &ui_img_contact_list_png, ui_contactScreen, ui_contactScreen_screen_init);
 
 lv_obj_t *ui_contactList;
 
@@ -51,6 +66,18 @@ void clearContactList()
 #endif
 }
 
+#ifdef ENABLE_APP_CONTACTS
+/* Tapping a contact asks the phone to dial it. The row's own position in the list is the
+   contact index the phone assigned when it synced them (they're appended in order by
+   addContact), so lv_obj_get_index() is enough - no need to store the number on the
+   watch or change addContact()'s signature. */
+static void onContactClicked(lv_event_t *e)
+{
+    lv_obj_t *panel = (lv_obj_t *)lv_event_get_target(e);
+    dial_contact((int)lv_obj_get_index(panel));
+}
+#endif
+
 void addContact(const char *name, const char *number, bool sos)
 {
 #ifdef ENABLE_APP_CONTACTS
@@ -59,8 +86,10 @@ void addContact(const char *name, const char *number, bool sos)
         return;
     }
     lv_obj_t *ui_contactPanel = lv_obj_create(ui_contactList);
-    lv_obj_set_width(ui_contactPanel, 200);
-    lv_obj_set_height(ui_contactPanel, 47);
+    lv_obj_add_flag(ui_contactPanel, LV_OBJ_FLAG_CLICKABLE);
+    lv_obj_add_event_cb(ui_contactPanel, onContactClicked, LV_EVENT_CLICKED, NULL);
+    lv_obj_set_width(ui_contactPanel, UI_SCALE_PX(200));
+    lv_obj_set_height(ui_contactPanel, UI_SCALE_PX(47));
     lv_obj_set_align(ui_contactPanel, LV_ALIGN_CENTER);
     lv_obj_remove_flag(ui_contactPanel, LV_OBJ_FLAG_SCROLLABLE); /// Flags
     lv_obj_set_style_radius(ui_contactPanel, 0, LV_PART_MAIN | LV_STATE_DEFAULT);
@@ -79,28 +108,33 @@ void addContact(const char *name, const char *number, bool sos)
     lv_image_set_src(ui_contactIcon, sos ? &ui_img_sos_contact_png : &ui_img_contact_png);
     lv_obj_set_width(ui_contactIcon, LV_SIZE_CONTENT);  /// 1
     lv_obj_set_height(ui_contactIcon, LV_SIZE_CONTENT); /// 1
-    lv_obj_set_x(ui_contactIcon, 10);
+    lv_obj_set_x(ui_contactIcon, UI_SCALE_PX(10));
     lv_obj_set_y(ui_contactIcon, 0);
     lv_obj_set_align(ui_contactIcon, LV_ALIGN_LEFT_MID);
     lv_obj_add_flag(ui_contactIcon, LV_OBJ_FLAG_ADV_HITTEST);  /// Flags
     lv_obj_remove_flag(ui_contactIcon, LV_OBJ_FLAG_SCROLLABLE); /// Flags
+    /* Grow the avatar with the panel, same trick the app/settings lists use. */
+    lv_image_set_scale(ui_contactIcon, (256 * UI_SCALE) / 256);
 
     lv_obj_t *ui_contactNumber = lv_label_create(ui_contactPanel);
-    lv_obj_set_width(ui_contactNumber, 140);
+    lv_obj_set_width(ui_contactNumber, UI_SCALE_PX(140));
     lv_obj_set_height(ui_contactNumber, LV_SIZE_CONTENT); /// 1
-    lv_obj_set_x(ui_contactNumber, 50);
-    lv_obj_set_y(ui_contactNumber, -5);
+    lv_obj_set_x(ui_contactNumber, UI_SCALE_PX(50));
+    lv_obj_set_y(ui_contactNumber, UI_SCALE_PX(-5));
     lv_obj_set_align(ui_contactNumber, LV_ALIGN_BOTTOM_LEFT);
-    lv_obj_set_style_text_font(ui_contactNumber, &lv_font_montserrat_14, LV_PART_MAIN | LV_STATE_DEFAULT);
+    lv_obj_set_style_text_font(ui_contactNumber, CONTACT_NUMBER_FONT, LV_PART_MAIN | LV_STATE_DEFAULT);
     lv_label_set_text(ui_contactNumber, number);
 
     lv_obj_t *ui_contactName = lv_label_create(ui_contactPanel);
-    lv_obj_set_width(ui_contactName, 140);
+    lv_obj_set_width(ui_contactName, UI_SCALE_PX(140));
     lv_obj_set_height(ui_contactName, LV_SIZE_CONTENT); /// 1
-    lv_obj_set_x(ui_contactName, 50);
-    lv_obj_set_y(ui_contactName, 3);
+    lv_obj_set_x(ui_contactName, UI_SCALE_PX(50));
+    lv_obj_set_y(ui_contactName, UI_SCALE_PX(3));
+    /* Names longer than the row scroll back and forth on their own (already how the
+       template had it - kept, and now with a properly scaled width so short names sit
+       still instead of everything scrolling). */
     lv_label_set_long_mode(ui_contactName, LV_LABEL_LONG_SCROLL_CIRCULAR);
-    lv_obj_set_style_text_font(ui_contactName, &lv_font_montserrat_16, LV_PART_MAIN | LV_STATE_DEFAULT);
+    lv_obj_set_style_text_font(ui_contactName, CONTACT_NAME_FONT, LV_PART_MAIN | LV_STATE_DEFAULT);
     lv_label_set_text(ui_contactName, name);
 #endif
 }
@@ -119,7 +153,7 @@ void setNoContacts()
     lv_obj_set_height(info, LV_SIZE_CONTENT); /// 1
     lv_label_set_long_mode(info, LV_LABEL_LONG_WRAP);
     lv_obj_set_style_text_font(info, &lv_font_montserrat_14, LV_PART_MAIN | LV_STATE_DEFAULT);
-    lv_label_set_text(info, "No contacts available. Add contacts from Chronos app and sync them");
+    lv_label_set_text(info, "No hay contactos disponibles. Agrega contactos desde la app Chronos y sincronízalos");
 #endif
 }
 

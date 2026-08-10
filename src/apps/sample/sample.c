@@ -8,7 +8,7 @@
 
 #ifdef ENABLE_APP_SAMPLE
 
-REGISTER_APP("Sample App", &ui_img_sample_png, sample_screen_main, sample_screen_init);
+REGISTER_APP("App de muestra", &ui_img_sample_png, sample_screen_main, sample_screen_init);
 
 void sample_screen_event_cb(lv_event_t *e)
 {
@@ -54,7 +54,7 @@ void sample_screen_init(void)
 
     lv_obj_t *label = lv_label_create(sample_screen_main);
     lv_obj_set_align(label, LV_ALIGN_CENTER);
-    lv_label_set_text(label, "Hello world!\nSample App");
+    lv_label_set_text(label, "¡Hola mundo!\nApp de muestra");
     lv_obj_set_style_text_font(label, &lv_font_montserrat_18, LV_PART_MAIN | LV_STATE_DEFAULT);
 
     lv_obj_add_event_cb(sample_screen_main, sample_screen_event_cb, LV_EVENT_ALL, NULL);

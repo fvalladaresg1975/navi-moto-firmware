@@ -36,6 +36,7 @@ void ui_app_exit(void);
     void navigateInfo(const char* text, const char* title, const char *directions);
     void navIconState(bool show);
     void setNavIconPx(uint16_t x, uint16_t y, bool on);
+    void navIconRefresh(void);
 
     lv_obj_t *get_nav_screen(void);
     

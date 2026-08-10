@@ -506,7 +506,12 @@ void update_status_pixel_resized_466(int battery, bool connection){
 	} else {
 		lv_obj_clear_flag(face_pixel_resized_466_18_218670, LV_OBJ_FLAG_HIDDEN);
 	}
-	lv_img_set_src(face_pixel_resized_466_20_226557, face_pixel_resized_466_dial_img_20_226557_group[(battery / (100 / 7)) % 7]);
+	// (battery / (100/7)) wraps back to icon index 0 (emptiest) at exactly battery=100,
+	// since 100/14=7 and 7%7=0 - showing a hollow battery icon at full charge. Clamp
+	// instead of wrapping so 100% lands on the last (fullest) icon.
+	int battLevel = battery / (100 / 7);
+	if (battLevel > 6) battLevel = 6;
+	lv_img_set_src(face_pixel_resized_466_20_226557, face_pixel_resized_466_dial_img_20_226557_group[battLevel]);
 
 #endif
 }

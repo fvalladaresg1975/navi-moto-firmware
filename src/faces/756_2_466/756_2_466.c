@@ -350,7 +350,7 @@ void update_status_756_2_466(int battery, bool connection){
     {
         return;
     }
-	lv_img_set_src(face_756_2_466_3_60934, face_756_2_466_dial_img_3_60934_group[(battery / (100 / 6)) % 6]);
+	{ int battLevel = battery / (100 / 6); if (battLevel > 5) battLevel = 5; lv_img_set_src(face_756_2_466_3_60934, face_756_2_466_dial_img_3_60934_group[battLevel]); }
 	lv_img_set_src(face_756_2_466_5_74432, face_756_2_466_dial_img_connection[(connection ? 0 : 1) % 2]);
 
 #endif

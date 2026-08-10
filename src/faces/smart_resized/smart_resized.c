@@ -417,7 +417,7 @@ void update_status_smart_resized(int battery, bool connection){
 	} else {
 		lv_obj_remove_flag(face_smart_resized_18_62309, LV_OBJ_FLAG_HIDDEN);
 	}
-	lv_image_set_src(face_smart_resized_19_63501, face_smart_resized_dial_img_19_63501_group[(battery / (100 / 11)) % 11]);
+	{ int battLevel = battery / (100 / 11); if (battLevel > 10) battLevel = 10; lv_image_set_src(face_smart_resized_19_63501, face_smart_resized_dial_img_19_63501_group[battLevel]); }
 
 #endif
 }

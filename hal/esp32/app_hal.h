@@ -76,8 +76,8 @@
 #endif
 
 #if defined(ESPS3_1_69) || defined(ESPS3_1_28) || defined(VIEWE_SMARTRING) || defined(ESPS3_1_75) || defined(ESPS3_2_06)
-#define ENABLE_APP_QMI8658C
-#define ENABLE_APP_ATTITUDE
+// #define ENABLE_APP_QMI8658C
+// #define ENABLE_APP_ATTITUDE
 #endif
 
 #if defined(ELECROW_C3) || defined(ELECROW_S3)
@@ -96,12 +96,12 @@
 #endif
 
 #define ENABLE_APP_CALENDAR
-#define ENABLE_APP_SAMPLE
+// #define ENABLE_APP_SAMPLE   // template/demo app, not useful on a real watch
 #define ENABLE_APP_TOUCH_TEST
 // #define ENABLE_GAME_TASK
 // #define ENABLE_GAME_RACING
 
-#define ENABLE_GAME_SIMON
+// #define ENABLE_GAME_SIMON
 
 #define ENABLE_APP_NAVIGATION
 #define ENABLE_APP_CONTACTS

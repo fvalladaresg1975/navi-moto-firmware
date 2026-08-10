@@ -16,6 +16,7 @@ extern "C"
 #include "lvgl.h"
 #include "app_hal.h"
 #include "../../common/app_manager.h"
+#include "../../common/api.h"
 
 #ifdef ENABLE_APP_CONTACTS
 

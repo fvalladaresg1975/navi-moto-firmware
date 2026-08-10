@@ -9,7 +9,7 @@
 
 #ifdef ENABLE_APP_CALENDAR
 
-REGISTER_APP("Calendar", &ui_img_calendar_png, calendar_screen_main, calendar_screen_init);
+REGISTER_APP("Calendario", &ui_img_calendar_png, calendar_screen_main, calendar_screen_init);
 
 static lv_obj_t *cal_obj;
 

@@ -10,3 +10,6 @@ scripts/api_migrate.py
 build.py
 /firmware
 /test/hardware
+
+# Local rollback snapshots (firmware binaries + notes), not source
+backups/
