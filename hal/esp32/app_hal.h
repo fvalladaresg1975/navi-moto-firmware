@@ -106,6 +106,7 @@
 #define ENABLE_APP_NAVIGATION
 #define ENABLE_APP_CONTACTS
 #define ENABLE_APP_TIMER
+#define ENABLE_APP_TRIP
 
 #ifdef __cplusplus
 extern "C" {

@@ -15,6 +15,9 @@ void onClickAlert(lv_event_t * e);
 void onForecastOpen(lv_event_t * e);
 void onWeatherLoad(lv_event_t * e);
 void onNotificationsOpen(lv_event_t * e);
+/* Refreshes the battery-runtime line when the settings screen opens - implemented in the
+   HAL, which is where the PMU and the saved charge reference live. */
+void onLoadSettings(void);
 void onBrightnessChange(lv_event_t * e);
 void onScrollMode(lv_event_t * e);
 void onTimeoutChange(lv_event_t * e);

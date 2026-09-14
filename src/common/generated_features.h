@@ -12,6 +12,7 @@
 #include "../apps/sample/sample.h"
 #include "../apps/timer/timer.h"
 #include "../apps/touch_test/touch_test.h"
+#include "../apps/trip/trip.h"
 
 // games
 #include "../games/racing/racing.h"

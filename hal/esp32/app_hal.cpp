@@ -103,6 +103,12 @@ SensorPCF85063 rtc;
 #include "esp_sleep.h"
 #endif
 
+/* For esp_reset_reason() - see the [RESET] line in hal_setup(). */
+#include "esp_system.h"
+/* Held for the whole run so the periodic heap log can repeat it - see hal_setup(). */
+const char *lastResetReason = "UNKNOWN";
+int lastResetCode = 0;
+
 // Waveshare's ESP32-S3-Touch-AMOLED-1.75 (ESPS3_1_75) also has an onboard AXP2101 PMU
 // (confirmed via Waveshare's own product docs), sharing the touch I2C bus like on
 // ESPS3_2_06 - so real battery-percent reading applies there too. The rest of
@@ -199,6 +205,10 @@ int pendingSosIndex = 0;
    dial_contact() can reconfigure the screen that hal_setup() built. */
 lv_obj_t *ui_callAcceptButton = NULL;
 lv_obj_t *ui_callRejectButton = NULL;
+/* Music playback state pushed by the phone (see dataCallback) - the protocol carries no
+   such thing, so the play button used to be a static icon that never reflected reality. */
+bool musicStatePending = false;
+bool pendingMusicPlaying = false;
 
 ChronosTimer screenTimer;
 ChronosTimer alertTimer;
@@ -1198,6 +1208,263 @@ void connectionCallback(bool state)
   connectionStatePending = true;
 }
 
+#if ESPS3_2_06 || ESPS3_1_75
+/* How long the watch has been running on the current charge.
+   The AXP2101 has no coulomb counter or history of its own, so this is measured here: the
+   moment the charger is unplugged we store the wall-clock time and the battery level in
+   NVS, and everything after that is a subtraction. Wall clock (not millis()) is what makes
+   it survive reboots, which only became possible once the PCF85063 RTC was enabled - with
+   millis() alone, any restart would have reset the count and hidden exactly the long runs
+   worth measuring. */
+uint32_t chargeRefEpoch = 0; // 0 = no reference yet
+int chargeRefPercent = 0;
+bool batteryWasOnPower = true; // assume powered until the first real reading says otherwise
+
+void updateBatteryRuntimeLabel(bool onPower)
+{
+  if (!ui_batteryRuntimeLabel)
+  {
+    return;
+  }
+  /* Only rewrite the text while the settings screen is actually on display. Formatting it
+     on every 30s poll regardless meant an allocation and an invalidate for something
+     nobody was looking at - and with LVGL now allocating from PSRAM, that is needless
+     churn. onLoadSettings() refreshes it when the screen opens, so it is never stale. */
+  if (lv_screen_active() != ui_settingsScreen)
+  {
+    return;
+  }
+  if (onPower)
+  {
+    lv_label_set_text(ui_batteryRuntimeLabel, "Cargando");
+    return;
+  }
+  if (chargeRefEpoch == 0)
+  {
+    lv_label_set_text(ui_batteryRuntimeLabel, "Sin datos de carga");
+    return;
+  }
+  uint32_t now = (uint32_t)watch.getEpoch();
+  if (now <= chargeRefEpoch)
+  {
+    /* Clock moved backwards - typically the phone corrected a drifting RTC. Rather than
+       print a negative or absurd duration, drop the stale reference and start over. */
+    lv_label_set_text(ui_batteryRuntimeLabel, "Sin datos de carga");
+    return;
+  }
+  uint32_t secs = now - chargeRefEpoch;
+  int used = chargeRefPercent - watchBatteryPercent;
+  if (used < 0)
+  {
+    used = 0;
+  }
+  /* ASCII-only on purpose: the Spanish fonts cover Latin-1, so an arrow like -> would
+     render as a blank box. */
+  lv_label_set_text_fmt(ui_batteryRuntimeLabel, "Desde carga: %luh %02lum  -%d%%",
+                        (unsigned long)(secs / 3600UL),
+                        (unsigned long)((secs % 3600UL) / 60UL),
+                        used);
+}
+
+void trackBatteryRuntime(int pct)
+{
+
+  bool onPower = PMU.isVbusIn();
+  if (batteryWasOnPower && !onPower)
+  {
+    /* Just unplugged - this is the start of a discharge cycle. */
+    chargeRefEpoch = (uint32_t)watch.getEpoch();
+    chargeRefPercent = pct;
+    prefs.putULong("battref_t", chargeRefEpoch);
+    prefs.putInt("battref_p", chargeRefPercent);
+    Timber.i("Battery reference set: %d%% at epoch %lu", chargeRefPercent, (unsigned long)chargeRefEpoch);
+  }
+  batteryWasOnPower = onPower;
+  updateBatteryRuntimeLabel(onPower);
+}
+#endif
+
+/* Called from ui.c when the settings screen finishes loading. Defined for every board so
+   ui.c does not need a board guard; it is a no-op where there is no PMU to read. */
+void onLoadSettings(void)
+{
+#if ESPS3_2_06 || ESPS3_1_75
+  updateBatteryRuntimeLabel(PMU.isVbusIn());
+#endif
+}
+
+/* ---------------------------------------------------------------------------
+   Last-trip statistics, derived from the navigation stream rather than measured.
+
+   Google Maps sends the distance REMAINING to the destination, never the distance
+   travelled, so this watches that figure fall and adds up the drops. Reroutes make it
+   jump back UP, which is why only decreases are accumulated - an increase is treated as
+   "the route changed", not as travel. That keeps a detour from corrupting the total,
+   though it also means a genuinely longer new route contributes only from that point on.
+   It is an estimate and the app screen says so.
+
+   No GPS is involved on purpose: this costs nothing on either device, which is the whole
+   reason for taking the indirect route to the number.
+   --------------------------------------------------------------------------- */
+bool tripActive = false;
+uint32_t tripStartEpoch = 0;
+long tripLastRemainingM = -1;
+long tripDistanceM = 0;
+
+/* ---------------------------------------------------------------------------
+   Turn-approach ring (the Beeline-style arc around the navigation screen).
+
+   Maps only ever sends the distance REMAINING to the next turn (nav.title, "180 m"),
+   never the length of the leg, so the leg length has to be inferred: it is the distance
+   seen at the moment a new leg starts. Two signals mark that moment, and both are needed:
+     - the turn icon's CRC changing (handled where the icon is redrawn), which catches
+       every leg whose arrow differs from the previous one;
+     - the remaining distance JUMPING UP, which catches consecutive legs that share an
+       icon (two right turns in a row) - the icon never changes, but the distance goes
+       from ~0 back up to the new leg's length.
+   The jump threshold is relative to the current leg so that Maps' rounding wobble on
+   long legs ("1,2 km" -> "1,3 km", a +100 m "increase") is not mistaken for a new leg.
+   --------------------------------------------------------------------------- */
+long turnLegStartM = -1;
+long turnLastM = -1;
+
+/* Parses the strings Maps sends, e.g. "18 km", "800 m", "1,2 km". Returns metres, or -1
+   if it cannot make sense of the text. Accepts both ',' and '.' as the decimal mark,
+   since the phone sends whatever its locale uses. */
+long parseDistanceMeters(const String &s)
+{
+  if (s.length() == 0)
+  {
+    return -1;
+  }
+  double value = 0;
+  int i = 0;
+  bool seenDigit = false;
+  while (i < (int)s.length() && !isDigit(s[i]))
+  {
+    i++;
+  }
+  while (i < (int)s.length() && isDigit(s[i]))
+  {
+    value = value * 10 + (s[i] - '0');
+    seenDigit = true;
+    i++;
+  }
+  if (!seenDigit)
+  {
+    return -1;
+  }
+  if (i < (int)s.length() && (s[i] == ',' || s[i] == '.'))
+  {
+    i++;
+    double frac = 0.1;
+    while (i < (int)s.length() && isDigit(s[i]))
+    {
+      value += (s[i] - '0') * frac;
+      frac /= 10;
+      i++;
+    }
+  }
+  String rest = s.substring(i);
+  rest.toLowerCase();
+  if (rest.indexOf("km") >= 0)
+  {
+    return (long)(value * 1000.0);
+  }
+  if (rest.indexOf("mi") >= 0)
+  {
+    return (long)(value * 1609.34);
+  }
+  if (rest.indexOf("ft") >= 0)
+  {
+    return (long)(value * 0.3048);
+  }
+  return (long)value; // plain metres
+}
+
+/* Returns 0..100: how much of the current leg is still ahead, for the ring. */
+int trackTurnProgress(const String &title)
+{
+  long d = parseDistanceMeters(title);
+  if (d < 0)
+  {
+    return 0;
+  }
+  long threshold = turnLegStartM / 5;
+  if (threshold < 30)
+  {
+    threshold = 30;
+  }
+  if (turnLegStartM < 0 || d > turnLastM + threshold)
+  {
+    turnLegStartM = d;
+  }
+  turnLastM = d;
+  if (turnLegStartM <= 0)
+  {
+    return 0;
+  }
+  long pct = (d * 100L) / turnLegStartM;
+  if (pct < 0)
+  {
+    pct = 0;
+  }
+  if (pct > 100)
+  {
+    pct = 100;
+  }
+  return (int)pct;
+}
+
+void trackTrip(const Navigation &n)
+{
+  if (n.active && n.isNavigation)
+  {
+    if (!tripActive)
+    {
+      tripActive = true;
+      tripStartEpoch = (uint32_t)watch.getEpoch();
+      tripDistanceM = 0;
+      tripLastRemainingM = -1;
+    }
+    long rem = parseDistanceMeters(n.distance);
+    if (rem >= 0)
+    {
+      if (tripLastRemainingM >= 0 && rem < tripLastRemainingM)
+      {
+        tripDistanceM += (tripLastRemainingM - rem);
+      }
+      tripLastRemainingM = rem;
+    }
+  }
+  else if (tripActive)
+  {
+    tripActive = false;
+    uint32_t now = (uint32_t)watch.getEpoch();
+    unsigned long secs = (now > tripStartEpoch) ? (now - tripStartEpoch) : 0;
+    /* Ignore trips that never really started - a navigation dismissed after a few seconds
+       would otherwise overwrite a real trip with noise. */
+    if (tripDistanceM > 100 && secs > 30)
+    {
+      prefs.putLong("tripdist", tripDistanceM);
+      prefs.putULong("tripsecs", secs);
+      Timber.i("Trip stored: %ld m in %lu s", tripDistanceM, secs);
+    }
+  }
+}
+
+void get_last_trip(long *meters, unsigned long *seconds)
+{
+  if (meters)
+  {
+    *meters = prefs.getLong("tripdist", 0);
+  }
+  if (seconds)
+  {
+    *seconds = prefs.getULong("tripsecs", 0);
+  }
+}
+
 // Runs on the loop task (owner of LVGL), driven by contactsRebuildPending.
 void rebuildContactList()
 {
@@ -1548,6 +1815,19 @@ void onClearNotifications(lv_event_t *e)
 void sendCallAction(bool accept)
 {
   uint8_t cmd[] = {0xAB, 0x00, 0x04, 0xFF, 0xC1, 0x80, (uint8_t)(accept ? 0x01 : 0x02)};
+  watch.sendCommand(cmd, 7);
+}
+
+// Same raw-notify mechanism, hi byte 0xC4. Deliberately fire-and-forget on this side:
+// the watch does NOT clear its own navigation state here. Maps removes its notification
+// once the phone triggers the exit action, the app then sends the regular navigation-stop
+// packet, and this screen closes through the exact path it already uses. Ending it
+// locally as well would just create a second source of truth that can disagree with the
+// phone (e.g. if the BLE packet is lost, the watch would show "no navigation" while Maps
+// is still guiding).
+void stop_navigation(void)
+{
+  uint8_t cmd[] = {0xAB, 0x00, 0x04, 0xFF, 0xC4, 0x80, 0x01};
   watch.sendCommand(cmd, 7);
 }
 
@@ -2002,12 +2282,21 @@ void rawDataCallback(uint8_t *data, int len)
 
 void dataCallback(uint8_t *data, int length)
 {
-  // Serial.println("Received Data");
-  // for (int i = 0; i < length; i++)
-  // {
-  //   Serial.printf("%02X ", data[i]);
-  // }
-  // Serial.println();
+  /* Fires for every assembled packet, before the library's own parser, which is what lets
+     this project add a phone->watch message without patching the vendored library (the
+     mistake that made the GPS-heading experiment so painful to undo).
+
+     0xC3 = music playing state, sent by our Android app: the ChronosESP32 protocol has no
+     concept of playback state at all, so the watch had no way to know whether the play
+     button should read "play" or "pause".
+
+     Runs on the NimBLE host task, so it only records the value - hal_loop() does the LVGL
+     work, same rule as notifications/weather/contacts/calls. */
+  if (length >= 7 && data[0] == 0xAB && data[4] == 0xC3)
+  {
+    pendingMusicPlaying = (data[6] == 0x01);
+    musicStatePending = true;
+  }
 }
 
 void imu_init()
@@ -2197,6 +2486,43 @@ void hal_setup()
   Timber.setOutput(logCallback);
 
   Timber.i("Starting up device");
+
+  /* Why the last restart happened. Added to chase reboots seen when the charge cable is
+     pulled or reinserted, which cannot be captured live: unplugging USB also kills the
+     serial link to the PC, so the event itself is never visible - only this line, on the
+     way back up, can say what caused it.
+     Reading it: BROWNOUT means the supply dipped while switching power paths (a hardware
+     characteristic, and the one that would also implicate writing to flash at that exact
+     moment, as trackBatteryRuntime does); PANIC or the watchdog causes mean a software
+     fault worth chasing; POWERON is a genuine cold start with nothing wrong. */
+  {
+    esp_reset_reason_t r = esp_reset_reason();
+    const char *why = "UNKNOWN";
+    switch (r)
+    {
+    /* UNKNOWN is what an esptool/RTS-driven reset reports, so it shows up on every
+       flash-and-reset cycle and does not indicate a problem by itself. */
+    case ESP_RST_UNKNOWN: why = "UNKNOWN (e.g. reset via USB tool)"; break;
+    case ESP_RST_POWERON: why = "POWERON (cold start)"; break;
+    case ESP_RST_SW: why = "SW (esp_restart)"; break;
+    case ESP_RST_PANIC: why = "PANIC (crash)"; break;
+    case ESP_RST_INT_WDT: why = "INT_WDT"; break;
+    case ESP_RST_TASK_WDT: why = "TASK_WDT"; break;
+    case ESP_RST_WDT: why = "WDT (other)"; break;
+    case ESP_RST_BROWNOUT: why = "BROWNOUT (supply dip)"; break;
+    case ESP_RST_EXT: why = "EXT (reset pin)"; break;
+    case ESP_RST_DEEPSLEEP: why = "DEEPSLEEP wake"; break;
+    default: break;
+    }
+    /* Kept for the whole run, not just printed once. The first version only logged this
+       at boot, and the reboot it was meant to catch happened with no monitor attached -
+       the line went to a port nobody was reading and the evidence was gone for good.
+       The periodic [HEAP] line repeats it, so attaching the monitor at any later time
+       still reveals what caused the last restart. */
+    lastResetReason = why;
+    lastResetCode = (int)r;
+    Serial.printf("[RESET] reason=%d %s\n", lastResetCode, lastResetReason);
+  }
 
   prefs.begin("my-app");
 
@@ -2542,6 +2868,11 @@ void hal_setup()
   }
   else
   {
+    /* Pick the discharge reference back up so a reboot doesn't restart the count. */
+    chargeRefEpoch = (uint32_t)prefs.getULong("battref_t", 0);
+    chargeRefPercent = prefs.getInt("battref_p", 0);
+    batteryWasOnPower = PMU.isVbusIn();
+
     int pct = PMU.getBatteryPercent();
     Timber.i("AXP2101 battery: %d%%, charging: %d, vbus: %d", pct, PMU.isCharging(), PMU.isVbusIn());
     if (pct >= 0)
@@ -2696,7 +3027,11 @@ void hal_loop()
      `free` holding roughly flat while `maxAlloc` (largest contiguous block) shrinks means
      fragmentation. */
   static unsigned long lastHeapLog = 0;
-  if (millis() - lastHeapLog >= 300000UL) // every 5 minutes
+  /* 60s rather than 5 min while the charge-cable reboot is being chased: this line now
+     also carries the last reset reason, and waiting five minutes to learn why the board
+     restarted is a poor trade for one printf. Worth putting back to 300000 once that is
+     settled. */
+  if (millis() - lastHeapLog >= 60000UL)
   {
     lastHeapLog = millis();
     // psram* is here to size up the real fix: the board definition (lolin_s3_pro.json)
@@ -2704,13 +3039,13 @@ void hal_loop()
     // malloc(), which on Arduino-ESP32 serves internal RAM only. If PSRAM really is
     // present, pointing LVGL's allocator at it moves every screen/label/style off the
     // 192 KB internal heap that BLE also depends on.
-    Serial.printf("[HEAP] up=%lus free=%u maxAlloc=%u minEver=%u | psramSize=%u psramFree=%u\n",
+    Serial.printf("[HEAP] up=%lus free=%u maxAlloc=%u minEver=%u | psramFree=%u | lastReset=%d %s\n",
                   millis() / 1000UL,
                   (unsigned)ESP.getFreeHeap(),
                   (unsigned)ESP.getMaxAllocHeap(),
                   (unsigned)ESP.getMinFreeHeap(),
-                  (unsigned)ESP.getPsramSize(),
-                  (unsigned)ESP.getFreePsram());
+                  (unsigned)ESP.getFreePsram(),
+                  lastResetCode, lastResetReason);
   }
 
   if (!transfer)
@@ -2761,6 +3096,13 @@ void hal_loop()
     {
       contactsRebuildPending = false;
       rebuildContactList();
+    }
+
+    if (musicStatePending)
+    {
+      musicStatePending = false;
+      lv_image_set_src(ui_musicPlayButton,
+                       pendingMusicPlaying ? &ui_img_pause_png : &ui_img_play_png);
     }
 
     lv_timer_handler(); // Update the UI-
@@ -2827,14 +3169,20 @@ void hal_loop()
     {
       navChanged = false;
       nav = watch.getNavigation();
+      /* Before the placeholder text below overwrites nav.distance for the inactive case -
+         trackTrip() needs the real values, and the active->inactive edge is what ends a
+         trip. */
+      trackTrip(nav);
       if (!nav.active)
       {
-        nav.directions = "Start navigation on Google maps";
+        nav.directions = "Inicia la navegación en Google Maps";
         nav.title = "Chronos";
-        nav.duration = watch.isConnected() ? "Inactive" : "Disconnected";
-        nav.eta = "Navigation";
+        nav.duration = watch.isConnected() ? "Inactiva" : "Desconectado";
+        nav.eta = "Navegación";
         nav.distance = "";
         navIcCRC = 0xFFFFFFFF;
+        turnLegStartM = -1;
+        turnLastM = -1;
       }
 
       if (!nav.isNavigation)
@@ -2843,7 +3191,26 @@ void hal_loop()
         nav.title = "";
       }
 
-      String navText = nav.eta + "\n" + nav.duration + " " + nav.distance;
+      /* One line at the bottom of the screen: "7 min · 2,5 km · 20:36". Maps' eta arrives
+         as "Llegada: 20:36"; the label is dropped because the time is unambiguous next to
+         the other two figures and the line has to fit the narrow bottom of the circle. */
+      String navText;
+      int turnPct = 0;
+      if (nav.active && nav.isNavigation)
+      {
+        String eta = nav.eta;
+        int p = eta.indexOf(": ");
+        if (p >= 0)
+        {
+          eta = eta.substring(p + 2);
+        }
+        navText = nav.duration + " · " + nav.distance + " · " + eta;
+        turnPct = trackTurnProgress(nav.title);
+      }
+      else
+      {
+        navText = nav.eta + " · " + nav.duration;
+      }
 
 #ifdef ENABLE_APP_NAVIGATION
       if (actScr != get_nav_screen() && nav.active && navSwitch)
@@ -2864,6 +3231,7 @@ void hal_loop()
       }
 #endif
       navIconState(nav.active && nav.hasIcon);
+      navTurnProgress(turnPct);
       navigateInfo(navText.c_str(), nav.title.c_str(), nav.directions.c_str());
     }
     if (navIcChanged)
@@ -2875,6 +3243,14 @@ void hal_loop()
       {
         navIcCRC = nav.iconCRC;
         navIconState(nav.active && nav.hasIcon);
+        /* A new arrow is a new leg. The data packet for it precedes the icon (see the
+           companion app's send order), so turnLastM already holds the new leg's distance
+           - make it the leg length and show the ring full. */
+        if (turnLastM > 0)
+        {
+          turnLegStartM = turnLastM;
+          navTurnProgress(100);
+        }
         for (int y = 0; y < 48; y++)
         {
           for (int x = 0; x < 48; x++)
@@ -2925,6 +3301,7 @@ void hal_loop()
           watch.setBattery(pct, PMU.isCharging());
           lv_slider_set_value(ui_batterySlider, watchBatteryPercent, LV_ANIM_OFF);
           lv_label_set_text_fmt(ui_batteryLabel, "Batería %d%%", watchBatteryPercent);
+          trackBatteryRuntime(pct);
         }
       }
     }

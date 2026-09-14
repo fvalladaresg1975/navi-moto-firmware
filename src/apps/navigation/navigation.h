@@ -37,6 +37,7 @@ void ui_app_exit(void);
     void navIconState(bool show);
     void setNavIconPx(uint16_t x, uint16_t y, bool on);
     void navIconRefresh(void);
+    void navTurnProgress(int percent);
 
     lv_obj_t *get_nav_screen(void);
     

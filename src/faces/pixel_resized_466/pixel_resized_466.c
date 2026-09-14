@@ -447,6 +447,34 @@ void init_face_pixel_resized_466(void (*callback)(const char*, const lv_img_dsc_
     lv_obj_clear_flag(face_pixel_resized_466_41_483485, LV_OBJ_FLAG_SCROLLABLE );
 
 
+    /* Hide the activity/health readouts. This board has no pedometer, heart-rate or SpO2
+       sensor, and the values fed to the faces are hard-coded constants in app_hal.cpp
+       (steps 2735, kcal 348, bpm 76...), so these digits always showed the same invented
+       numbers. Objects 16-18 are a third readout on the same row that no update function
+       ever writes, so it sat at 000 permanently. Hiding beats blanking: the digits are
+       image objects, so there is no "empty" glyph to show instead.
+       Note the little icons beside them are painted into the dial artwork, not separate
+       objects, so they stay - removing those means editing the background image.
+
+       Objects 16/17/18 are deliberately NOT in this list: they are the BATTERY percentage
+       digits, written by update_status_pixel_resized_466(). They were hidden here at
+       first because a search of the activity and health update functions did not mention
+       them, and that was read as "unused" without checking update_status - which broke
+       the battery readout on this face (only the leading "1" of "100" stayed visible, so
+       it read as "1%"). */
+    lv_obj_add_flag(face_pixel_resized_466_1_218670, LV_OBJ_FLAG_HIDDEN);
+    lv_obj_add_flag(face_pixel_resized_466_2_218670, LV_OBJ_FLAG_HIDDEN);
+    lv_obj_add_flag(face_pixel_resized_466_3_218670, LV_OBJ_FLAG_HIDDEN);
+    lv_obj_add_flag(face_pixel_resized_466_4_218670, LV_OBJ_FLAG_HIDDEN);
+    lv_obj_add_flag(face_pixel_resized_466_5_218670, LV_OBJ_FLAG_HIDDEN);
+    lv_obj_add_flag(face_pixel_resized_466_6_218670, LV_OBJ_FLAG_HIDDEN);
+    lv_obj_add_flag(face_pixel_resized_466_7_218670, LV_OBJ_FLAG_HIDDEN);
+    lv_obj_add_flag(face_pixel_resized_466_8_218670, LV_OBJ_FLAG_HIDDEN);
+    lv_obj_add_flag(face_pixel_resized_466_9_218670, LV_OBJ_FLAG_HIDDEN);
+    lv_obj_add_flag(face_pixel_resized_466_13_218670, LV_OBJ_FLAG_HIDDEN);
+    lv_obj_add_flag(face_pixel_resized_466_14_218670, LV_OBJ_FLAG_HIDDEN);
+    lv_obj_add_flag(face_pixel_resized_466_15_218670, LV_OBJ_FLAG_HIDDEN);
+
     callback("Pixel", &face_pixel_resized_466_dial_img_preview_0, &face_pixel_resized_466, NULL);
 
 #endif

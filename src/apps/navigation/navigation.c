@@ -10,12 +10,30 @@
 */
 
 #include "navigation.h"
+#include "../../common/api.h"
 #include "../../../hal/esp32/displays/pins.h"
 
 #ifdef ENABLE_APP_NAVIGATION
 
-#define CANVAS_WIDTH 48
-#define CANVAS_HEIGHT 48
+// The phone always sends a 48x48 1bpp bitmap - that size is fixed by the protocol and
+// cannot change. On a 466px screen it renders as a very small arrow, so the canvas is made
+// physically larger and each source pixel is drawn as a block into it (see setNavIconPx).
+//
+// This is deliberately NOT done with lv_image_set_scale()/transform_scale on the canvas
+// object: that was tried and confirmed broken on hardware for this indexed I2 canvas (see
+// the note where the canvas is created). Enlarging the buffer itself involves no LVGL
+// transform at all, so it sidesteps that failure entirely.
+//
+// To change how big the arrow is, change these two only - everything else derives from
+// them. Keep them equal to preserve the aspect ratio. The band 70..166px is reserved for
+// it in the screen layout below; going past 96 needs the distance label moved down too.
+#define NAV_ICON_SRC 48 // protocol-fixed source size, do not change
+#define CANVAS_WIDTH 96
+#define CANVAS_HEIGHT 96
+
+// The distance-to-turn is the one number read at speed, so it gets a larger render-only
+// scale than the other labels (30px font -> ~50px). Same mechanism as NAV_TEXT_SCALE.
+#define NAV_HERO_SCALE (256 + (((UI_SCALE) - 256) * 7) / 10)
 
 REGISTER_APP("Navegación", &ui_img_arrow_png, ui_navScreen, ui_navScreen_screen_init);
 
@@ -26,6 +44,61 @@ lv_obj_t *ui_navDistance;
 lv_obj_t *ui_navIconCanvas;
 lv_obj_t *ui_navIcon;
 lv_obj_t *ui_navTitle;
+static lv_obj_t *ui_navRing;
+
+/* Exit confirmation: a right-to-left swipe reveals this layer with one big "Salir" button;
+   tapping it ends the Maps navigation. Two steps on purpose - a swipe alone was judged
+   too easy to trigger by accident on the bike - and the layer dismisses itself after a
+   few seconds so an accidental swipe leaves nothing behind. */
+static lv_obj_t *ui_navExitLayer;
+static lv_timer_t *navExitTimer;
+
+static void hideNavExitLayer(void)
+{
+    if (navExitTimer)
+    {
+        lv_timer_delete(navExitTimer);
+        navExitTimer = NULL;
+    }
+    lv_obj_add_flag(ui_navExitLayer, LV_OBJ_FLAG_HIDDEN);
+}
+
+static void onNavExitTimeout(lv_timer_t *t)
+{
+    (void)t;
+    navExitTimer = NULL; /* one-shot: LVGL deletes it after this returns */
+    lv_obj_add_flag(ui_navExitLayer, LV_OBJ_FLAG_HIDDEN);
+}
+
+static void showNavExitLayer(void)
+{
+    if (navExitTimer)
+    {
+        lv_timer_reset(navExitTimer);
+    }
+    else
+    {
+        navExitTimer = lv_timer_create(onNavExitTimeout, 6000, NULL);
+        lv_timer_set_repeat_count(navExitTimer, 1);
+    }
+    lv_obj_remove_flag(ui_navExitLayer, LV_OBJ_FLAG_HIDDEN);
+}
+
+static void onNavExitConfirm(lv_event_t *e)
+{
+    (void)e;
+    hideNavExitLayer();
+    stop_navigation();
+}
+
+/* A tap anywhere on the dimmed background (outside the button) cancels. */
+static void onNavExitCancel(lv_event_t *e)
+{
+    if (lv_event_get_target(e) == ui_navExitLayer)
+    {
+        hideNavExitLayer();
+    }
+}
 
 void ui_event_navScreen(lv_event_t *e)
 {
@@ -47,9 +120,30 @@ void ui_event_navScreen(lv_event_t *e)
         onGameClosed();
     }
 
-    if (event_code == LV_EVENT_GESTURE && lv_indev_get_gesture_dir(lv_indev_active()) == LV_DIR_RIGHT)
+    if (event_code == LV_EVENT_GESTURE)
     {
-        ui_app_exit();
+        lv_dir_t dir = lv_indev_get_gesture_dir(lv_indev_active());
+        bool exitShown = !lv_obj_has_flag(ui_navExitLayer, LV_OBJ_FLAG_HIDDEN);
+        if (dir == LV_DIR_RIGHT)
+        {
+            // While the exit layer is up, swiping back just dismisses it - it must not
+            // fall through to leaving the app.
+            if (exitShown)
+            {
+                hideNavExitLayer();
+            }
+            else
+            {
+                ui_app_exit();
+            }
+        }
+        // Swipe right-to-left reveals the exit confirmation. A gesture rather than an
+        // always-visible button: a button had to live in the narrow bottom of the circle
+        // and covered the info line there. Left = leave, mirroring right = back.
+        if (dir == LV_DIR_LEFT)
+        {
+            showNavExitLayer();
+        }
     }
 }
 
@@ -73,65 +167,105 @@ void ui_navScreen_screen_init()
     lv_obj_set_style_bg_color(ui_navPanel, lv_color_hex(0x000000), LV_PART_MAIN | LV_STATE_DEFAULT);
     lv_obj_set_style_bg_opa(ui_navPanel, 255, LV_PART_MAIN | LV_STATE_DEFAULT);
     lv_obj_set_style_border_width(ui_navPanel, 0, LV_PART_MAIN | LV_STATE_DEFAULT);
+    // The theme gives panels inner padding, which pushed top-aligned children down and
+    // bottom-aligned children up - the info line and the (since removed) Salir button
+    // overlapped on hardware because of it. Zero it so the bands below mean what they say.
+    lv_obj_set_style_pad_all(ui_navPanel, 0, LV_PART_MAIN | LV_STATE_DEFAULT);
 
-    // No accented font is available above size 20, and flash is maxed out (99.6%) so a
-    // new larger one isn't an option. These labels have no touch targets and are cheap
-    // to render (just a few short strings), so a render-only transform_scale is safe
-    // here to make the text visually bigger - unlike the music panel's buttons/icon
-    // canvas above, where the same trick broke touch hit-areas and caused rendering
-    // glitches (see UI_SCALE_PX comment in pins.h).
-    ui_navDirection = lv_label_create(ui_navPanel);
-    lv_obj_set_width(ui_navDirection, 180);
-    lv_obj_set_height(ui_navDirection, LV_SIZE_CONTENT); /// 1
-    lv_obj_set_x(ui_navDirection, 0);
-    lv_obj_set_y(ui_navDirection, UI_SCALE_PX(156));
-    lv_obj_set_align(ui_navDirection, LV_ALIGN_TOP_MID);
-    lv_label_set_text(ui_navDirection, "Disponible en v3.7.5+");
-    lv_obj_set_style_text_align(ui_navDirection, LV_TEXT_ALIGN_CENTER, LV_PART_MAIN | LV_STATE_DEFAULT);
-    lv_obj_set_style_text_font(ui_navDirection, &lv_font_montserrat_16, LV_PART_MAIN | LV_STATE_DEFAULT);
-    lv_obj_set_style_transform_pivot_x(ui_navDirection, LV_PCT(50), LV_PART_MAIN | LV_STATE_DEFAULT);
-    lv_obj_set_style_transform_pivot_y(ui_navDirection, LV_PCT(50), LV_PART_MAIN | LV_STATE_DEFAULT);
-    lv_obj_set_style_transform_scale_x(ui_navDirection, NAV_TEXT_SCALE, LV_PART_MAIN | LV_STATE_DEFAULT);
-    lv_obj_set_style_transform_scale_y(ui_navDirection, NAV_TEXT_SCALE, LV_PART_MAIN | LV_STATE_DEFAULT);
+    // Layout, top to bottom on the 466px circle (Beeline-style glanceable hierarchy):
+    //   ring        edge        empties as the next turn approaches
+    //   arrow       70..166     the turn icon, the hero
+    //   distance    ~194..254   distance to the turn, the big number
+    //   street      ~259..333   up to two lines, then "..."
+    //   info        357..381    "7 min · 2,5 km · 20:36", one line
+    // Ending navigation: right-to-left swipe reveals a confirmation layer with one big
+    // button (see the end of this function), so nothing permanent sits in the bottom band.
+    // Each band is sized so the one below it can never be overdrawn: the street label has
+    // a fixed two-line height instead of LV_SIZE_CONTENT for exactly that reason.
 
-    ui_navText = lv_label_create(ui_navPanel);
-    lv_obj_set_width(ui_navText, LV_SIZE_CONTENT);  /// 1
-    lv_obj_set_height(ui_navText, LV_SIZE_CONTENT); /// 1
-    lv_obj_set_x(ui_navText, 0);
-    lv_obj_set_y(ui_navText, UI_SCALE_PX(21));
-    lv_obj_set_align(ui_navText, LV_ALIGN_TOP_MID);
-    lv_label_set_text(ui_navText, "Navegación\nSolo ESP32");
-    lv_obj_set_style_text_align(ui_navText, LV_TEXT_ALIGN_CENTER, LV_PART_MAIN | LV_STATE_DEFAULT);
-    lv_obj_set_style_text_font(ui_navText, &lv_font_montserrat_20, LV_PART_MAIN | LV_STATE_DEFAULT);
-    lv_obj_set_style_transform_pivot_x(ui_navText, LV_PCT(50), LV_PART_MAIN | LV_STATE_DEFAULT);
-    lv_obj_set_style_transform_pivot_y(ui_navText, LV_PCT(50), LV_PART_MAIN | LV_STATE_DEFAULT);
-    lv_obj_set_style_transform_scale_x(ui_navText, NAV_TEXT_SCALE, LV_PART_MAIN | LV_STATE_DEFAULT);
-    lv_obj_set_style_transform_scale_y(ui_navText, NAV_TEXT_SCALE, LV_PART_MAIN | LV_STATE_DEFAULT);
+    // Created first so it renders behind everything else. Not clickable, or it would
+    // swallow touches meant for the Salir button below it - the arc covers the whole panel.
+    ui_navRing = lv_arc_create(ui_navPanel);
+    lv_obj_set_size(ui_navRing, UI_SCALE_PX(240), UI_SCALE_PX(240));
+    lv_obj_center(ui_navRing);
+    lv_arc_set_rotation(ui_navRing, 270); // start at 12 o'clock
+    lv_arc_set_bg_angles(ui_navRing, 0, 360);
+    lv_arc_set_range(ui_navRing, 0, 100);
+    lv_arc_set_value(ui_navRing, 0);
+    lv_arc_set_mode(ui_navRing, LV_ARC_MODE_NORMAL); // fills clockwise from the start
+    lv_obj_remove_style(ui_navRing, NULL, LV_PART_KNOB);
+    lv_obj_remove_flag(ui_navRing, LV_OBJ_FLAG_CLICKABLE);
+    // Inset a few px so the bezel doesn't shave the outer edge of the stroke.
+    lv_obj_set_style_pad_all(ui_navRing, UI_SCALE_PX(3), LV_PART_MAIN | LV_STATE_DEFAULT);
+    lv_obj_set_style_bg_opa(ui_navRing, 0, LV_PART_MAIN | LV_STATE_DEFAULT);
+    lv_obj_set_style_arc_width(ui_navRing, UI_SCALE_PX(7), LV_PART_MAIN | LV_STATE_DEFAULT);
+    lv_obj_set_style_arc_color(ui_navRing, lv_color_hex(0x2C2C2A), LV_PART_MAIN | LV_STATE_DEFAULT);
+    lv_obj_set_style_arc_width(ui_navRing, UI_SCALE_PX(7), LV_PART_INDICATOR | LV_STATE_DEFAULT);
+    lv_obj_set_style_arc_color(ui_navRing, lv_color_hex(0xEF9F27), LV_PART_INDICATOR | LV_STATE_DEFAULT);
+    lv_obj_set_style_arc_rounded(ui_navRing, true, LV_PART_INDICATOR | LV_STATE_DEFAULT);
 
+    // No accented font is available above size 20 and flash is scarce, so the labels use
+    // a render-only transform_scale to read bigger. Safe here because none of them is a
+    // touch target - unlike the music panel's buttons/icon canvas, where the same trick
+    // broke touch hit-areas and caused rendering glitches (see UI_SCALE_PX in pins.h).
     ui_navDistance = lv_label_create(ui_navPanel);
     lv_obj_set_width(ui_navDistance, LV_SIZE_CONTENT);  /// 1
     lv_obj_set_height(ui_navDistance, LV_SIZE_CONTENT); /// 1
     lv_obj_set_x(ui_navDistance, 0);
-    lv_obj_set_y(ui_navDistance, UI_SCALE_PX(121) + 10);
+    lv_obj_set_y(ui_navDistance, UI_SCALE_PX(106));
     lv_obj_set_align(ui_navDistance, LV_ALIGN_TOP_MID);
     lv_label_set_text(ui_navDistance, "Chronos");
     lv_obj_set_style_text_font(ui_navDistance, &lv_font_montserrat_30, LV_PART_MAIN | LV_STATE_DEFAULT);
     lv_obj_set_style_transform_pivot_x(ui_navDistance, LV_PCT(50), LV_PART_MAIN | LV_STATE_DEFAULT);
     lv_obj_set_style_transform_pivot_y(ui_navDistance, LV_PCT(50), LV_PART_MAIN | LV_STATE_DEFAULT);
-    lv_obj_set_style_transform_scale_x(ui_navDistance, NAV_DISTANCE_SCALE, LV_PART_MAIN | LV_STATE_DEFAULT);
-    lv_obj_set_style_transform_scale_y(ui_navDistance, NAV_DISTANCE_SCALE, LV_PART_MAIN | LV_STATE_DEFAULT);
+    lv_obj_set_style_transform_scale_x(ui_navDistance, NAV_HERO_SCALE, LV_PART_MAIN | LV_STATE_DEFAULT);
+    lv_obj_set_style_transform_scale_y(ui_navDistance, NAV_HERO_SCALE, LV_PART_MAIN | LV_STATE_DEFAULT);
+
+    ui_navDirection = lv_label_create(ui_navPanel);
+    lv_obj_set_width(ui_navDirection, 210);
+    // Exactly two lines of the font, fixed. Long street names end in "..." rather than
+    // growing into the info line beneath. Taken from the font, not hard-coded: 48 was
+    // fractionally under two of Montserrat 20's line height and LONG_DOT then kept only
+    // one line ("en dirección a Vi...").
+    lv_obj_set_height(ui_navDirection, 2 * lv_font_get_line_height(&lv_font_montserrat_20) + 2);
+    lv_obj_set_x(ui_navDirection, 0);
+    lv_obj_set_y(ui_navDirection, UI_SCALE_PX(140));
+    lv_obj_set_align(ui_navDirection, LV_ALIGN_TOP_MID);
+    lv_label_set_long_mode(ui_navDirection, LV_LABEL_LONG_DOT);
+    lv_label_set_text(ui_navDirection, "Disponible en v3.7.5+");
+    lv_obj_set_style_text_align(ui_navDirection, LV_TEXT_ALIGN_CENTER, LV_PART_MAIN | LV_STATE_DEFAULT);
+    lv_obj_set_style_text_font(ui_navDirection, &lv_font_montserrat_20, LV_PART_MAIN | LV_STATE_DEFAULT);
+    lv_obj_set_style_transform_pivot_x(ui_navDirection, LV_PCT(50), LV_PART_MAIN | LV_STATE_DEFAULT);
+    lv_obj_set_style_transform_pivot_y(ui_navDirection, LV_PCT(50), LV_PART_MAIN | LV_STATE_DEFAULT);
+    lv_obj_set_style_transform_scale_x(ui_navDirection, NAV_TEXT_SCALE, LV_PART_MAIN | LV_STATE_DEFAULT);
+    lv_obj_set_style_transform_scale_y(ui_navDirection, NAV_TEXT_SCALE, LV_PART_MAIN | LV_STATE_DEFAULT);
+
+    // Secondary figures, one line, no transform: the bottom of the circle is narrow and
+    // "1 h 20 min · 85 km · 20:36" at 20px is already ~290px of the ~380px available there.
+    ui_navText = lv_label_create(ui_navPanel);
+    lv_obj_set_width(ui_navText, LV_SIZE_CONTENT);  /// 1
+    lv_obj_set_height(ui_navText, LV_SIZE_CONTENT); /// 1
+    lv_obj_set_x(ui_navText, 0);
+    lv_obj_set_y(ui_navText, UI_SCALE_PX(184));
+    lv_obj_set_align(ui_navText, LV_ALIGN_TOP_MID);
+    lv_label_set_text(ui_navText, "Navegación · Solo ESP32");
+    lv_obj_set_style_text_align(ui_navText, LV_TEXT_ALIGN_CENTER, LV_PART_MAIN | LV_STATE_DEFAULT);
+    lv_obj_set_style_text_font(ui_navText, &lv_font_montserrat_20, LV_PART_MAIN | LV_STATE_DEFAULT);
+    lv_obj_set_style_text_color(ui_navText, lv_color_hex(0xB4B2A9), LV_PART_MAIN | LV_STATE_DEFAULT);
 
     LV_DRAW_BUF_DEFINE_STATIC(cbuf, CANVAS_WIDTH, CANVAS_HEIGHT, LV_COLOR_FORMAT_I2);
     LV_DRAW_BUF_INIT_STATIC(cbuf);
 
-    // The canvas holds a fixed 48x48 bitmap streamed pixel-by-pixel from the phone
-    // (setNavIconPx below), so its own size stays native res - only reposition it.
+    // The canvas holds the 48x48 bitmap streamed pixel-by-pixel from the phone
+    // (setNavIconPx below), upscaled into a larger buffer so the arrow is readable at a
+    // glance on the road. The object size must match the draw buffer exactly - the
+    // enlargement happens when writing pixels, never as a render transform.
     ui_navIconCanvas = lv_canvas_create(ui_navPanel);
     lv_canvas_set_draw_buf(ui_navIconCanvas, &cbuf);
-    lv_obj_set_width(ui_navIconCanvas, 48);
-    lv_obj_set_height(ui_navIconCanvas, 48);
+    lv_obj_set_width(ui_navIconCanvas, CANVAS_WIDTH);
+    lv_obj_set_height(ui_navIconCanvas, CANVAS_HEIGHT);
     lv_obj_set_x(ui_navIconCanvas, -8);
-    lv_obj_set_y(ui_navIconCanvas, UI_SCALE_PX(68));
+    lv_obj_set_y(ui_navIconCanvas, UI_SCALE_PX(36));
     lv_obj_set_align(ui_navIconCanvas, LV_ALIGN_TOP_MID);
     lv_obj_remove_flag(ui_navIconCanvas, LV_OBJ_FLAG_SCROLLABLE); /// Flags
     lv_obj_set_style_radius(ui_navIconCanvas, 0, LV_PART_MAIN | LV_STATE_DEFAULT);
@@ -152,15 +286,16 @@ void ui_navScreen_screen_init()
     // Tried lv_image_set_scale() here to enlarge the icon - confirmed on hardware it
     // breaks rendering on this indexed/low-bpp canvas (showed as a small broken square
     // instead of the icon), same class of issue as transform_scale caused on the music
-    // panel's canvas earlier. Reverted - see navigation.c's own note above about why
-    // this canvas is kept at native 48x48.
+    // panel's canvas earlier. Still true, so do not reintroduce it: the icon is enlarged
+    // by upscaling into a bigger buffer instead (see NAV_ICON_SRC / CANVAS_WIDTH at the
+    // top of this file), which needs no transform.
 
     ui_navIcon = lv_image_create(ui_navPanel);
     lv_image_set_src(ui_navIcon, &ui_img_chronos_logo_png);
     lv_obj_set_width(ui_navIcon, LV_SIZE_CONTENT);  /// 1
     lv_obj_set_height(ui_navIcon, LV_SIZE_CONTENT); /// 1
     lv_obj_set_x(ui_navIcon, -8);
-    lv_obj_set_y(ui_navIcon, UI_SCALE_PX(68));
+    lv_obj_set_y(ui_navIcon, UI_SCALE_PX(36) + 16);
     lv_obj_set_align(ui_navIcon, LV_ALIGN_TOP_MID);
     lv_obj_remove_flag(ui_navIcon, LV_OBJ_FLAG_SCROLLABLE); /// Flags
 
@@ -172,6 +307,55 @@ void ui_navScreen_screen_init()
     // lv_obj_set_style_text_align(ui_navTitle, LV_TEXT_ALIGN_AUTO, LV_PART_MAIN | LV_STATE_DEFAULT);
     // lv_obj_set_style_text_decor(ui_navTitle, LV_TEXT_DECOR_UNDERLINE, LV_PART_MAIN | LV_STATE_DEFAULT);
     // lv_obj_set_style_text_font(ui_navTitle, &lv_font_montserrat_16, LV_PART_MAIN | LV_STATE_DEFAULT);
+
+    // Exit confirmation layer. A child of the SCREEN, created last, so it draws over the
+    // panel and everything in it. Dimmed rather than opaque so the arrow and distance
+    // stay readable behind it - the user should still know where they are.
+    ui_navExitLayer = lv_obj_create(ui_navScreen);
+    lv_obj_set_size(ui_navExitLayer, LV_PCT(100), LV_PCT(100));
+    lv_obj_center(ui_navExitLayer);
+    lv_obj_set_style_radius(ui_navExitLayer, 0, LV_PART_MAIN | LV_STATE_DEFAULT);
+    lv_obj_set_style_bg_color(ui_navExitLayer, lv_color_hex(0x000000), LV_PART_MAIN | LV_STATE_DEFAULT);
+    lv_obj_set_style_bg_opa(ui_navExitLayer, 200, LV_PART_MAIN | LV_STATE_DEFAULT);
+    lv_obj_set_style_border_width(ui_navExitLayer, 0, LV_PART_MAIN | LV_STATE_DEFAULT);
+    lv_obj_set_style_pad_all(ui_navExitLayer, 0, LV_PART_MAIN | LV_STATE_DEFAULT);
+    lv_obj_remove_flag(ui_navExitLayer, LV_OBJ_FLAG_SCROLLABLE);
+    lv_obj_add_flag(ui_navExitLayer, LV_OBJ_FLAG_HIDDEN);
+    lv_obj_add_event_cb(ui_navExitLayer, onNavExitCancel, LV_EVENT_CLICKED, NULL);
+
+    lv_obj_t *exitTitle = lv_label_create(ui_navExitLayer);
+    lv_label_set_text(exitTitle, "¿Terminar la navegación?");
+    lv_obj_set_style_text_font(exitTitle, &lv_font_montserrat_20, LV_PART_MAIN | LV_STATE_DEFAULT);
+    lv_obj_set_align(exitTitle, LV_ALIGN_CENTER);
+    lv_obj_set_y(exitTitle, UI_SCALE_PX(-44));
+
+    // Centred, where the circle is widest, and sized for a gloved thumb: ~250x93px.
+    lv_obj_t *exitButton = lv_obj_create(ui_navExitLayer);
+    lv_obj_set_width(exitButton, UI_SCALE_PX(130));
+    lv_obj_set_height(exitButton, UI_SCALE_PX(48));
+    lv_obj_center(exitButton);
+    lv_obj_set_style_radius(exitButton, LV_RADIUS_CIRCLE, LV_PART_MAIN | LV_STATE_DEFAULT);
+    // Same red as the call screen's hang-up button: one colour for "end this" everywhere.
+    lv_obj_set_style_bg_color(exitButton, lv_color_hex(0xE74C3C), LV_PART_MAIN | LV_STATE_DEFAULT);
+    lv_obj_set_style_bg_color(exitButton, lv_color_hex(0xA93226), LV_PART_MAIN | LV_STATE_PRESSED);
+    lv_obj_set_style_bg_opa(exitButton, 255, LV_PART_MAIN | LV_STATE_DEFAULT);
+    lv_obj_set_style_border_width(exitButton, 0, LV_PART_MAIN | LV_STATE_DEFAULT);
+    lv_obj_set_style_pad_all(exitButton, 0, LV_PART_MAIN | LV_STATE_DEFAULT);
+    lv_obj_remove_flag(exitButton, LV_OBJ_FLAG_SCROLLABLE);
+    lv_obj_add_flag(exitButton, LV_OBJ_FLAG_CLICKABLE);
+    lv_obj_add_event_cb(exitButton, onNavExitConfirm, LV_EVENT_CLICKED, NULL);
+
+    lv_obj_t *exitLabel = lv_label_create(exitButton);
+    lv_label_set_text(exitLabel, LV_SYMBOL_CLOSE "  Salir");
+    lv_obj_set_style_text_font(exitLabel, &lv_font_montserrat_30, LV_PART_MAIN | LV_STATE_DEFAULT);
+    lv_obj_center(exitLabel);
+
+    lv_obj_t *exitHint = lv_label_create(ui_navExitLayer);
+    lv_label_set_text(exitHint, "Toca fuera para cancelar");
+    lv_obj_set_style_text_font(exitHint, &lv_font_montserrat_16, LV_PART_MAIN | LV_STATE_DEFAULT);
+    lv_obj_set_style_text_color(exitHint, lv_color_hex(0xB4B2A9), LV_PART_MAIN | LV_STATE_DEFAULT);
+    lv_obj_set_align(exitHint, LV_ALIGN_CENTER);
+    lv_obj_set_y(exitHint, UI_SCALE_PX(44));
 
     lv_obj_add_event_cb(ui_navScreen, ui_event_navScreen, LV_EVENT_ALL, NULL);
 
@@ -201,13 +385,29 @@ void navIconState(bool show)
     if (show)
     {
         lv_obj_remove_flag(ui_navIconCanvas, LV_OBJ_FLAG_HIDDEN);
+        lv_obj_remove_flag(ui_navRing, LV_OBJ_FLAG_HIDDEN);
         lv_obj_add_flag(ui_navIcon, LV_OBJ_FLAG_HIDDEN);
     }
     else
     {
         lv_obj_add_flag(ui_navIconCanvas, LV_OBJ_FLAG_HIDDEN);
+        lv_obj_add_flag(ui_navRing, LV_OBJ_FLAG_HIDDEN);
         lv_obj_remove_flag(ui_navIcon, LV_OBJ_FLAG_HIDDEN);
     }
+#endif
+}
+
+/* 0..100 = share of the current leg still ahead. The HAL derives it (trackTurnProgress);
+   this only paints it. */
+void navTurnProgress(int percent)
+{
+#ifdef ENABLE_APP_NAVIGATION
+    if (!ui_navScreen){
+        return;
+    }
+    if (percent < 0) percent = 0;
+    if (percent > 100) percent = 100;
+    lv_arc_set_value(ui_navRing, percent);
 #endif
 }
 
@@ -217,14 +417,28 @@ void setNavIconPx(uint16_t x, uint16_t y, bool on)
     if (!ui_navScreen){
         return;
     }
-    if (on)
+    if (x >= NAV_ICON_SRC || y >= NAV_ICON_SRC)
     {
-
-        lv_canvas_set_px(ui_navIconCanvas, x, y, lv_color_make(255, 255, 255), LV_OPA_COVER);
+        return;
     }
-    else
+
+    lv_color_t color = on ? lv_color_make(255, 255, 255) : lv_color_make(0, 0, 0);
+
+    /* Nearest-neighbour upscale: fill the destination rectangle this source pixel covers.
+       Deriving both edges from the same expression (pixel n's right edge is pixel n+1's
+       left edge) makes the blocks tile exactly - no gaps, no double-drawn pixels - for any
+       source:canvas ratio, whether or not it divides evenly. */
+    uint16_t x0 = (uint16_t)((uint32_t)x * CANVAS_WIDTH / NAV_ICON_SRC);
+    uint16_t x1 = (uint16_t)(((uint32_t)x + 1) * CANVAS_WIDTH / NAV_ICON_SRC);
+    uint16_t y0 = (uint16_t)((uint32_t)y * CANVAS_HEIGHT / NAV_ICON_SRC);
+    uint16_t y1 = (uint16_t)(((uint32_t)y + 1) * CANVAS_HEIGHT / NAV_ICON_SRC);
+
+    for (uint16_t py = y0; py < y1; py++)
     {
-        lv_canvas_set_px(ui_navIconCanvas, x, y, lv_color_make(0, 0, 0), LV_OPA_COVER);
+        for (uint16_t px = x0; px < x1; px++)
+        {
+            lv_canvas_set_px(ui_navIconCanvas, px, py, color, LV_OPA_COVER);
+        }
     }
 #endif
 }

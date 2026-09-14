@@ -35,6 +35,17 @@ void imu_close();
    Implemented in the HAL since it needs the BLE `watch` object. */
 void dial_contact(int index);
 
+/* Asks the phone to end the current Google Maps navigation. The watch never ends it
+   locally: navigation lives in Maps, so the phone fires the "Salir de la navegación"
+   action on Maps' own notification and the watch then leaves the screen through the
+   normal navigation-stop path. Implemented in the HAL since it needs the BLE `watch`. */
+void stop_navigation(void);
+
+/* Statistics for the most recently finished navigation, persisted across reboots.
+   Both are zero when no trip has been recorded yet. See the implementation in the HAL
+   for how the distance is derived and why it is an estimate. */
+void get_last_trip(long *meters, unsigned long *seconds);
+
 
 #ifdef __cplusplus
 } /*extern "C"*/

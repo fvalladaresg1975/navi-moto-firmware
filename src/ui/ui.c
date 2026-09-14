@@ -134,6 +134,7 @@ void ui_event_batterySlider(lv_event_t *e);
 lv_obj_t *ui_batterySlider;
 lv_obj_t *ui_batteryIcon;
 lv_obj_t *ui_batteryLabel;
+lv_obj_t *ui_batteryRuntimeLabel;
 lv_obj_t *ui_aboutPanel;
 lv_obj_t *ui_aboutIcon;
 lv_obj_t *ui_aboutText;
@@ -740,6 +741,12 @@ void ui_event_settingsScreen(lv_event_t *e)
 {
       lv_event_code_t event_code = lv_event_get_code(e);
       lv_obj_t *target = lv_event_get_target(e);
+      if (event_code == LV_EVENT_SCREEN_LOADED)
+      {
+            /* The battery-runtime line is only refreshed while this screen is visible, so
+               bring it up to date on open rather than showing whatever the last poll left. */
+            onLoadSettings();
+      }
       if (event_code == LV_EVENT_GESTURE && lv_indev_get_gesture_dir(lv_indev_active()) == LV_DIR_RIGHT)
       {
             _ui_screen_change(ui_appListScreen, LV_SCR_LOAD_ANIM_MOVE_RIGHT, 500, 0);
@@ -3311,6 +3318,17 @@ void ui_settingsScreen_screen_init(void)
       lv_obj_set_x(ui_batteryLabel, UI_SCALE_PX(53));
       lv_obj_set_y(ui_batteryLabel, UI_SCALE_PX(3));
       lv_label_set_text(ui_batteryLabel, "Batería 50%");
+
+      /* How long the watch has been running on this charge, filled in by the HAL from a
+         reference point saved in NVS the moment the charger is unplugged. */
+      ui_batteryRuntimeLabel = lv_label_create(ui_batteryPanel);
+      lv_obj_set_width(ui_batteryRuntimeLabel, UI_SCALE_PX(140));
+      lv_obj_set_height(ui_batteryRuntimeLabel, LV_SIZE_CONTENT);
+      lv_obj_set_x(ui_batteryRuntimeLabel, UI_SCALE_PX(53));
+      lv_obj_set_y(ui_batteryRuntimeLabel, UI_SCALE_PX(22));
+      lv_label_set_long_mode(ui_batteryRuntimeLabel, LV_LABEL_LONG_CLIP);
+      lv_obj_set_style_text_font(ui_batteryRuntimeLabel, &lv_font_montserrat_14, LV_PART_MAIN | LV_STATE_DEFAULT);
+      lv_label_set_text(ui_batteryRuntimeLabel, "Sin datos de carga");
 
       ui_aboutPanel = lv_obj_create(ui_settingsList);
       lv_obj_set_width(ui_aboutPanel, UI_SCALE_PX(200));

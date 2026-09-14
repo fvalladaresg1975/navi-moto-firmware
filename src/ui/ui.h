@@ -118,6 +118,7 @@ extern "C"
     extern lv_obj_t *ui_batterySlider;
     extern lv_obj_t *ui_batteryIcon;
     extern lv_obj_t *ui_batteryLabel;
+    extern lv_obj_t *ui_batteryRuntimeLabel;
     extern lv_obj_t *ui_aboutPanel;
     extern lv_obj_t *ui_aboutIcon;
     extern lv_obj_t *ui_aboutText;
@@ -319,6 +320,7 @@ extern "C"
     LV_IMG_DECLARE(ui_img_bat_png);        // assets\bat.png
     LV_IMG_DECLARE(ui_img_info_png);       // assets\info.png
     LV_IMG_DECLARE(ui_img_play_png);       // assets\play.png
+    LV_IMG_DECLARE(ui_img_pause_png);      // assets\pause.png
     LV_IMG_DECLARE(ui_img_1592976543);     // assets\left-arrow.png
     LV_IMG_DECLARE(ui_img_2138854088);     // assets\right-arrow.png
     LV_IMG_DECLARE(ui_img_bt_png);         // assets\bt.png

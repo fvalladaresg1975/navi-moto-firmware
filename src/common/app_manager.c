@@ -116,9 +116,22 @@ int app_registry_get_count()
  *   STATIC FUNCTIONS
  **********************/
 
+/* Navigation is this device's primary function, and swiping out of its screen lands on
+   this list - so it must be the first tile, in a fixed place, or getting back to it means
+   hunting through an alphabetical list with gloves on (Contactos sorted ahead of it and
+   was being hit by mistake). Everything else stays alphabetical. Matched by the title
+   REGISTER_APP is given in navigation.c; keep the two in sync. */
+#define APP_PINNED_FIRST "Navegación"
+
 static int compare(const void *a, const void *b)
 {
     const app_info_t *appA = *(const app_info_t **)a;
     const app_info_t *appB = *(const app_info_t **)b;
+    int aPinned = strcmp(appA->name, APP_PINNED_FIRST) == 0;
+    int bPinned = strcmp(appB->name, APP_PINNED_FIRST) == 0;
+    if (aPinned != bPinned)
+    {
+        return aPinned ? -1 : 1;
+    }
     return strcmp(appA->name, appB->name);
 }
