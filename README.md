@@ -33,6 +33,7 @@ Sobre el protocolo BLE de la librería [ChronosESP32](https://github.com/fbiego/
 | `0xC5` | app → placa | cuadro del modo ruta: camino en píxeles, velocidad, límite y posición del conductor |
 | `0xC6` | app → placa | velocidad y límite en modo Google Maps |
 | `0xC7` | app → placa | calles alrededor (agregar / borrar) |
+| `0xC8` | ambos | brillo de la pantalla: la app lo fija o lo pide; la placa avisa el nivel actual |
 
 ## Créditos y licencia
 

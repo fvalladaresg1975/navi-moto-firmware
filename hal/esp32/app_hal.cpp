@@ -260,6 +260,17 @@ static void streetQPush(const uint8_t *p, int len)
    them in route mode). Same NimBLE-task -> hal_loop hand-off; two bytes, so a plain
    volatile pair plus flag is enough (a torn read would at worst show one stale digit for
    one second). Hidden again if the phone stops sending. */
+/* 0xC8: screen brightness set from the phone (home-screen widget). The BLE task only
+   records it; hal_loop() applies it like the settings slider would and reports the level
+   back, so the widget always shows the watch's real brightness. Changes made on the
+   watch's own slider are reported too, BRIGHTNESS_REPORT_MS after the last movement (a
+   drag fires dozens of events). */
+static volatile int pendingBrightness = -1; // 1-255, -1 = report only
+static volatile bool brightnessPending = false;
+static bool brightnessReportDue = false;
+static unsigned long brightnessChangedMs = 0;
+#define BRIGHTNESS_REPORT_MS 400UL
+
 static volatile int pendingMapsSpeed = 255;
 static volatile int pendingMapsLimit = 0;
 static volatile bool mapsSpeedPending = false;
@@ -2023,6 +2034,16 @@ void onBrightnessChange(lv_event_t *e)
   screenBrightness(v);
 
   prefs.putInt("brightness", v);
+  // Tell the phone's widget, once the slider settles (see BRIGHTNESS_REPORT_MS).
+  brightnessReportDue = true;
+  brightnessChangedMs = millis();
+}
+
+/* Watch -> phone: current brightness (1-255), same 7-byte raw notify as 0xC1/0xC4. */
+void reportBrightness(void)
+{
+  uint8_t cmd[] = {0xAB, 0x00, 0x04, 0xFF, 0xC8, 0x80, (uint8_t)lv_slider_get_value(ui_brightnessSlider)};
+  watch.sendCommand(cmd, 7);
 }
 
 void onFaceSelected(lv_event_t *e)
@@ -2420,6 +2441,17 @@ void dataCallback(uint8_t *data, int length)
         portEXIT_CRITICAL(&routeMux);
       }
     }
+  }
+
+  /* 0xC8 = screen brightness. sub 0x01: [level 1-255] set it; sub 0x00: only report the
+     current level (the phone asks on every connection). Applied in hal_loop(). */
+  if (length >= 6 && data[0] == 0xAB && data[4] == 0xC8)
+  {
+    if (data[5] == 0x01 && length >= 7 && data[6] >= 1)
+    {
+      pendingBrightness = data[6];
+    }
+    brightnessPending = true;
   }
 
   /* 0xC7 = street layer. sub 0x00: forget all; sub 0x01: add streets (payload from
@@ -3243,6 +3275,31 @@ void hal_loop()
     {
       contactsRebuildPending = false;
       rebuildContactList();
+    }
+
+    if (brightnessPending)
+    {
+      brightnessPending = false;
+      int v = pendingBrightness;
+      pendingBrightness = -1;
+      if (v >= 1 && v <= 255)
+      {
+        // Exactly what the settings slider does; the slider is the source of truth that
+        // the screen-on loop below re-applies every pass.
+        lv_slider_set_value(ui_brightnessSlider, v, LV_ANIM_OFF);
+        prefs.putInt("brightness", v);
+        if (screenTimer.active)
+        {
+          screenBrightness(v);
+        }
+      }
+      reportBrightness();
+      brightnessReportDue = false;
+    }
+    if (brightnessReportDue && millis() - brightnessChangedMs > BRIGHTNESS_REPORT_MS)
+    {
+      brightnessReportDue = false;
+      reportBrightness();
     }
 
     if (musicStatePending)
