@@ -153,7 +153,7 @@ void setNoContacts()
     lv_obj_set_height(info, LV_SIZE_CONTENT); /// 1
     lv_label_set_long_mode(info, LV_LABEL_LONG_WRAP);
     lv_obj_set_style_text_font(info, &lv_font_montserrat_14, LV_PART_MAIN | LV_STATE_DEFAULT);
-    lv_label_set_text(info, "No hay contactos disponibles. Agrega contactos desde la app Chronos y sincronízalos");
+    lv_label_set_text(info, "No hay contactos disponibles. Agrega contactos desde la app Navi Moto y sincronízalos");
 #endif
 }
 

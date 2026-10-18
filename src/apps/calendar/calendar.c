@@ -6,12 +6,109 @@
  */
 
 #include "calendar.h"
+#include "../../../hal/esp32/displays/pins.h" /* UI_SCALE_PX */
 
 #ifdef ENABLE_APP_CALENDAR
 
 REGISTER_APP("Calendario", &ui_img_calendar_png, calendar_screen_main, calendar_screen_init);
 
+/* Sized for the round screen instead of the old fixed 200x200 (made for 240 px panels, it
+   filled less than half of the 466 px one). The grid box is kept inside the circle: its
+   bottom corners are the tightest spot. Day names (L M X J V S D) and month names come
+   from lv_conf.h; the header is our own, because LVGL's arrow header prints "2026 Octubre"
+   with tiny buttons. */
+#define CAL_W UI_SCALE_PX(165)
+#define CAL_H UI_SCALE_PX(149)
+#define CAL_Y UI_SCALE_PX(14)
+#define HDR_Y UI_SCALE_PX(-77)
+#define HDR_BTN UI_SCALE_PX(23)
+#define HDR_BTN_X UI_SCALE_PX(67)
+#define CAL_ACCENT 0xFFC24D /* the amber accent used across the UI */
+/* private to lv_calendar.c: the button-matrix flag it puts on today's cell */
+#define CAL_CTRL_TODAY LV_BUTTONMATRIX_CTRL_CUSTOM_1
+
+static const char *month_names[12] = LV_CALENDAR_DEFAULT_MONTH_NAMES;
+
 static lv_obj_t *cal_obj;
+static lv_obj_t *cal_title;
+static int shown_year = 2026, shown_month = 1;
+
+static void show_month(int year, int month)
+{
+    shown_year = year;
+    shown_month = month;
+    lv_calendar_set_showed_date(cal_obj, year, month);
+    lv_label_set_text_fmt(cal_title, "%s %d", month_names[month - 1], year);
+}
+
+static void month_btn_cb(lv_event_t *e)
+{
+    int step = (int)(intptr_t)lv_event_get_user_data(e);
+    int m = shown_month + step, y = shown_year;
+    if (m < 1)
+    {
+        m = 12;
+        y--;
+    }
+    else if (m > 12)
+    {
+        m = 1;
+        y++;
+    }
+    show_month(y, m);
+}
+
+/* Day-name row in amber, today as a filled amber circle with black digits (LVGL's own look
+   is a 1 px border). Runs after the calendar's built-in draw callback, which already
+   blanks the day-name cells and the days of the neighbouring months. */
+static void grid_draw_cb(lv_event_t *e)
+{
+    lv_obj_t *btnm = lv_event_get_current_target(e);
+    lv_draw_task_t *task = lv_event_get_param(e);
+    lv_draw_dsc_base_t *base = (lv_draw_dsc_base_t *)lv_draw_task_get_draw_dsc(task);
+    if (base->part != LV_PART_ITEMS)
+        return;
+    lv_draw_label_dsc_t *label = lv_draw_task_get_label_dsc(task);
+    if (base->id1 < 7)
+    {
+        if (label)
+            label->color = lv_color_hex(CAL_ACCENT);
+        return;
+    }
+    if (!lv_buttonmatrix_has_button_ctrl(btnm, base->id1, CAL_CTRL_TODAY))
+        return;
+
+    lv_draw_fill_dsc_t *fill = lv_draw_task_get_fill_dsc(task);
+    lv_draw_border_dsc_t *border = lv_draw_task_get_border_dsc(task);
+    if (fill)
+    {
+        fill->color = lv_color_hex(CAL_ACCENT);
+        fill->opa = LV_OPA_COVER;
+    }
+    if (border)
+        border->opa = LV_OPA_TRANSP;
+    if (label)
+        label->color = lv_color_hex(0x000000);
+}
+
+static lv_obj_t *make_month_btn(lv_obj_t *parent, int x, const char *symbol, int step)
+{
+    lv_obj_t *btn = lv_button_create(parent);
+    lv_obj_set_size(btn, HDR_BTN * 2, HDR_BTN * 2);
+    lv_obj_align(btn, LV_ALIGN_CENTER, x, HDR_Y);
+    lv_obj_set_style_radius(btn, LV_RADIUS_CIRCLE, LV_PART_MAIN | LV_STATE_DEFAULT);
+    lv_obj_set_style_bg_color(btn, lv_color_hex(0x262626), LV_PART_MAIN | LV_STATE_DEFAULT);
+    lv_obj_set_style_bg_color(btn, lv_color_hex(0x4A4A4A), LV_PART_MAIN | LV_STATE_PRESSED);
+    lv_obj_set_style_shadow_width(btn, 0, LV_PART_MAIN | LV_STATE_DEFAULT);
+    lv_obj_add_event_cb(btn, month_btn_cb, LV_EVENT_CLICKED, (void *)(intptr_t)step);
+
+    lv_obj_t *lbl = lv_label_create(btn);
+    lv_label_set_text(lbl, symbol);
+    lv_obj_set_style_text_font(lbl, &lv_font_montserrat_24, LV_PART_MAIN | LV_STATE_DEFAULT);
+    lv_obj_set_style_text_color(lbl, lv_color_hex(0xFFFFFF), LV_PART_MAIN | LV_STATE_DEFAULT);
+    lv_obj_center(lbl);
+    return btn;
+}
 
 void calendar_screen_event_cb(lv_event_t *e)
 {
@@ -57,14 +154,38 @@ void calendar_screen_init(void)
     lv_obj_set_style_bg_color(calendar_screen_main, lv_color_hex(0x000000), LV_PART_MAIN | LV_STATE_DEFAULT);
     lv_obj_set_style_bg_opa(calendar_screen_main, 255, LV_PART_MAIN | LV_STATE_DEFAULT);
 
+    /* header: < Octubre 2026 > */
+    cal_title = lv_label_create(calendar_screen_main);
+    lv_obj_align(cal_title, LV_ALIGN_CENTER, 0, HDR_Y);
+    lv_obj_set_style_text_font(cal_title, &lv_font_montserrat_24, LV_PART_MAIN | LV_STATE_DEFAULT);
+    lv_obj_set_style_text_color(cal_title, lv_color_hex(0xFFFFFF), LV_PART_MAIN | LV_STATE_DEFAULT);
+    make_month_btn(calendar_screen_main, -HDR_BTN_X - UI_SCALE_PX(30), LV_SYMBOL_LEFT, -1);
+    make_month_btn(calendar_screen_main, HDR_BTN_X + UI_SCALE_PX(30), LV_SYMBOL_RIGHT, 1);
+
     cal_obj = lv_calendar_create(calendar_screen_main);
-    lv_obj_t *cal_obj_header = lv_calendar_header_arrow_create(cal_obj);
-    lv_obj_set_width(cal_obj, 200);
-    lv_obj_set_height(cal_obj, 200);
-    lv_obj_set_align(cal_obj, LV_ALIGN_CENTER);
+    lv_obj_set_size(cal_obj, CAL_W, CAL_H);
+    lv_obj_align(cal_obj, LV_ALIGN_CENTER, 0, CAL_Y);
     lv_obj_set_style_bg_color(cal_obj, lv_color_hex(0x000000), LV_PART_MAIN | LV_STATE_DEFAULT);
     lv_obj_set_style_bg_opa(cal_obj, 255, LV_PART_MAIN | LV_STATE_DEFAULT);
     lv_obj_set_style_border_width(cal_obj, 0, LV_PART_MAIN | LV_STATE_DEFAULT);
+    lv_obj_set_style_pad_all(cal_obj, 0, LV_PART_MAIN | LV_STATE_DEFAULT);
+
+    lv_obj_t *grid = lv_calendar_get_btnmatrix(cal_obj);
+    lv_obj_set_style_bg_opa(grid, LV_OPA_TRANSP, LV_PART_MAIN | LV_STATE_DEFAULT);
+    lv_obj_set_style_border_width(grid, 0, LV_PART_MAIN | LV_STATE_DEFAULT);
+    lv_obj_set_style_pad_all(grid, 0, LV_PART_MAIN | LV_STATE_DEFAULT);
+    lv_obj_set_style_pad_row(grid, UI_SCALE_PX(2), LV_PART_MAIN | LV_STATE_DEFAULT);
+    lv_obj_set_style_pad_column(grid, UI_SCALE_PX(2), LV_PART_MAIN | LV_STATE_DEFAULT);
+    /* items: black fill (so a fill draw task exists for today's circle), white digits */
+    lv_obj_set_style_text_font(grid, &lv_font_montserrat_24, LV_PART_ITEMS | LV_STATE_DEFAULT);
+    lv_obj_set_style_text_color(grid, lv_color_hex(0xFFFFFF), LV_PART_ITEMS | LV_STATE_DEFAULT);
+    lv_obj_set_style_text_color(grid, lv_color_hex(0x5A5A5A), LV_PART_ITEMS | LV_STATE_DISABLED);
+    lv_obj_set_style_bg_color(grid, lv_color_hex(0x000000), LV_PART_ITEMS | LV_STATE_DEFAULT);
+    lv_obj_set_style_bg_opa(grid, LV_OPA_COVER, LV_PART_ITEMS | LV_STATE_DEFAULT);
+    lv_obj_set_style_border_width(grid, 0, LV_PART_ITEMS | LV_STATE_DEFAULT);
+    lv_obj_set_style_shadow_width(grid, 0, LV_PART_ITEMS | LV_STATE_DEFAULT);
+    lv_obj_set_style_radius(grid, LV_RADIUS_CIRCLE, LV_PART_ITEMS | LV_STATE_DEFAULT);
+    lv_obj_add_event_cb(grid, grid_draw_cb, LV_EVENT_DRAW_TASK_ADDED, NULL);
 
     lv_obj_add_event_cb(calendar_screen_main, calendar_screen_event_cb, LV_EVENT_ALL, NULL);
 }
@@ -79,6 +200,6 @@ void calendar_set_today(int year, int month, int day)
         return;
     }
     lv_calendar_set_today_date(cal_obj, year, month, day);
-    lv_calendar_set_showed_date(cal_obj, year, month);
+    show_month(year, month);
 #endif
 }

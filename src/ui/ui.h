@@ -128,6 +128,10 @@ extern "C"
     extern lv_obj_t *ui_kenyaText;
     void ui_event_controlScreen(lv_event_t *e);
     extern lv_obj_t *ui_controlScreen;
+    /* Where the control (music/volume) screen returns to on swipe-up. NULL = ui_home, the
+       historical behaviour. A screen that opens the control panel from somewhere else
+       (navigation) sets this to itself first; it is consumed on the way back. */
+    extern lv_obj_t *ui_controlReturnScreen;
     extern lv_obj_t *ui_controlPanel;
     void ui_event_musicPlayButton(lv_event_t *e);
     extern lv_obj_t *ui_musicPlayButton;

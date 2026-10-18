@@ -48,7 +48,7 @@
 
 #include "main.h"
 #include "displays/pins.h"
-#include "splash.h"
+#include "splash_moto.h"
 
 
 #include "driver/rtc_io.h"
@@ -129,7 +129,7 @@ int watchBatteryPercent = 100; // last known-good AXP2101 reading, used by watch
 Button2 btn_home;
 #endif
 
-ChronosESP32 watch("Chronos C3");
+ChronosESP32 watch("Navi Moto");
 Preferences prefs;
 
 #ifdef ENABLE_APP_QMI8658C
@@ -210,12 +210,81 @@ lv_obj_t *ui_callRejectButton = NULL;
 bool musicStatePending = false;
 bool pendingMusicPlaying = false;
 
+/* Route mode frames (0xC5, see dataCallback). Written on the NimBLE task, read in
+   hal_loop(): a spinlock around both copies, because unlike a single bool flag a frame is
+   ~130 bytes and a torn read would draw half of one road and half of the next. */
+#define ROUTE_MAX_POINTS 32
+static portMUX_TYPE routeMux = portMUX_INITIALIZER_UNLOCKED;
+static int16_t pendingRouteXY[ROUTE_MAX_POINTS * 2];
+static int pendingRouteN = 0;
+static int pendingRouteSpeed = 255; // km/h, 255 = unknown
+static int pendingRouteLimit = 0;   // km/h, 0 = unknown
+static volatile bool routeFramePending = false;
+static volatile bool routeClearPending = false;
+static unsigned long lastRouteFrameMs = 0;
+static bool routeShown = false;
+/* Rider pose for the street layer, optional tail of the route frame (same lock). */
+static bool pendingPoseValid = false;
+static int32_t pendingPoseX = 0, pendingPoseY = 0; // decimetres, street-map frame
+static int pendingPoseHdg = 0, pendingPoseScale = 0;
+
+/* 0xC7 street-layer packets. Kept in arrival order in a small queue (a clear must apply
+   between the adds that came before and after it); hal_loop() drains it into
+   navigation.c. len 0 = clear. A full queue drops the packet - the phone sends at most a
+   few at a time and hal_loop empties it every pass. */
+#define STREET_Q 8
+#define STREET_PKT_MAX 500
+static portMUX_TYPE streetMux = portMUX_INITIALIZER_UNLOCKED;
+static uint8_t streetQ[STREET_Q][STREET_PKT_MAX];
+static int16_t streetQLen[STREET_Q];
+static int streetQHead = 0, streetQCount = 0;
+static uint8_t streetBuf[STREET_PKT_MAX];
+
+static void streetQPush(const uint8_t *p, int len)
+{
+  if (len > STREET_PKT_MAX)
+    len = STREET_PKT_MAX;
+  portENTER_CRITICAL(&streetMux);
+  if (streetQCount < STREET_Q)
+  {
+    int slot = (streetQHead + streetQCount) % STREET_Q;
+    if (len > 0)
+      memcpy(streetQ[slot], p, len);
+    streetQLen[slot] = len;
+    streetQCount++;
+  }
+  portEXIT_CRITICAL(&streetMux);
+}
+
+/* 0xC6: speed + posted limit while navigating with Google Maps (the route frame carries
+   them in route mode). Same NimBLE-task -> hal_loop hand-off; two bytes, so a plain
+   volatile pair plus flag is enough (a torn read would at worst show one stale digit for
+   one second). Hidden again if the phone stops sending. */
+static volatile int pendingMapsSpeed = 255;
+static volatile int pendingMapsLimit = 0;
+static volatile bool mapsSpeedPending = false;
+static unsigned long lastMapsSpeedMs = 0;
+static bool mapsSpeedShown = false;
+#define MAPS_SPEED_STALE_MS 5000UL
+/* If frames stop (phone app killed, link dropped) the line must not freeze on screen
+   pretending to be current - a frozen road is worse than none. Phone sends at 1 Hz. */
+#define ROUTE_STALE_MS 5000UL
+
 ChronosTimer screenTimer;
 ChronosTimer alertTimer;
 ChronosTimer searchTimer;
 
 Navigation nav;
 bool navChanged = false;
+/* Auto-open of the navigation screen ("autonav" setting). It used to fire on EVERY nav
+   update while the user was on any other screen - in route mode that is every second, so
+   swiping down to the music/volume panel lasted one second before being yanked back. Now
+   it fires once when navigation STARTS, and otherwise only after the rider has left the
+   navigation screen alone for NAV_RETURN_IDLE_MS: change a song, let go, it comes back
+   by itself - no reaching over to swipe back mid-ride. Never over the call screen. */
+static bool navWasActive = false;
+static unsigned long navReturnAtMs = 0;
+#define NAV_RETURN_IDLE_MS 15000UL
 bool navIcChanged = false;
 uint32_t navIcCRC = 0xFFFFFFFF;
 
@@ -2297,6 +2366,75 @@ void dataCallback(uint8_t *data, int length)
     pendingMusicPlaying = (data[6] == 0x01);
     musicStatePending = true;
   }
+
+  /* 0xC5 = route mode. sub 0x01: [n][x hi][x lo][y hi][y lo]... signed 16-bit watch
+     pixels relative to the rider, y negative = ahead; sub 0x00: leave route mode. All
+     geometry is done on the phone. Length is checked against n so a short or corrupt
+     packet can never read past the buffer the library handed us. */
+  if (length >= 8 && data[0] == 0xAB && data[4] == 0xC6 && data[5] == 0x01)
+  {
+    pendingMapsSpeed = data[6];
+    pendingMapsLimit = data[7];
+    mapsSpeedPending = true;
+  }
+
+  if (length >= 6 && data[0] == 0xAB && data[4] == 0xC5)
+  {
+    if (data[5] == 0x00)
+    {
+      routeClearPending = true;
+      // Route ended: its streets go with it, queued in order with the street packets so
+      // a new route's streets arriving right after can't be wiped by this clear. (A route
+      // view that merely goes stale keeps them - frames may resume.)
+      streetQPush(NULL, 0);
+    }
+    else if (data[5] == 0x01 && length >= 7)
+    {
+      int n = data[6];
+      if (n >= 2 && n <= ROUTE_MAX_POINTS && length >= 7 + n * 4)
+      {
+        portENTER_CRITICAL(&routeMux);
+        for (int i = 0; i < n; i++)
+        {
+          const uint8_t *p = &data[7 + i * 4];
+          pendingRouteXY[i * 2] = (int16_t)((p[0] << 8) | p[1]);
+          pendingRouteXY[i * 2 + 1] = (int16_t)((p[2] << 8) | p[3]);
+        }
+        pendingRouteN = n;
+        // Optional trailing [speed km/h][limit km/h] (route-look update). Older phone
+        // builds don't send them; treat as unknown.
+        int extra = 7 + n * 4;
+        pendingRouteSpeed = (length >= extra + 2) ? data[extra] : 255;
+        pendingRouteLimit = (length >= extra + 2) ? data[extra + 1] : 0;
+        // Optional rider pose for the street layer: [x dm i32][y dm i32][hdg u16][scale].
+        const uint8_t *q = &data[extra + 2];
+        pendingPoseValid = length >= extra + 2 + 11;
+        if (pendingPoseValid)
+        {
+          pendingPoseX = (int32_t)(((uint32_t)q[0] << 24) | ((uint32_t)q[1] << 16) | ((uint32_t)q[2] << 8) | q[3]);
+          pendingPoseY = (int32_t)(((uint32_t)q[4] << 24) | ((uint32_t)q[5] << 16) | ((uint32_t)q[6] << 8) | q[7]);
+          pendingPoseHdg = (q[8] << 8) | q[9];
+          pendingPoseScale = q[10];
+        }
+        routeFramePending = true;
+        portEXIT_CRITICAL(&routeMux);
+      }
+    }
+  }
+
+  /* 0xC7 = street layer. sub 0x00: forget all; sub 0x01: add streets (payload from
+     data[6], parsed and bounds-checked in navStreetsAdd). */
+  if (length >= 6 && data[0] == 0xAB && data[4] == 0xC7)
+  {
+    if (data[5] == 0x00)
+    {
+      streetQPush(NULL, 0);
+    }
+    else if (data[5] == 0x01 && length >= 6 + 9)
+    {
+      streetQPush(&data[6], length - 6);
+    }
+  }
 }
 
 void imu_init()
@@ -2460,16 +2598,25 @@ int putchar(int ch)
   return ch;
 }
 
+/* Boot splash: a motorcycle crossing the screen left to right (include/splash_moto.h,
+   generated). Replaces the upstream static "ESP32 C3 Mini" logo, which named another
+   board. Drawn with LovyanGFX before LVGL exists, like the original. Each frame pushes
+   the whole image STEP px further right; its first SPLASH_MOTO_MARGIN columns are black,
+   so the push itself erases the previous frame's trailing edge - no per-frame clear.
+   Crosses through the vertical centre, where the round panel is fully visible. ~1.2 s,
+   a bit under the 2 s the static logo used to hold. */
 void loadSplash()
 {
-  int w = 122;
-  int h = 130;
-  int x = (SCREEN_WIDTH - w) / 2;
-  int y = (SCREEN_HEIGHT - h) / 2;
+  const int STEP = 14; // must stay <= SPLASH_MOTO_MARGIN
+  const int y = (SCREEN_HEIGHT - SPLASH_MOTO_H) / 2;
   tft.fillScreen(TFT_BLACK);
   screenBrightness(200);
-  tft.pushImage(x, y, w, h, (uint16_t *)splash);
-  delay(2000);
+  for (int x = -SPLASH_MOTO_W; x < SCREEN_WIDTH; x += STEP)
+  {
+    tft.pushImage(x, y, SPLASH_MOTO_W, SPLASH_MOTO_H, (uint16_t *)splash_moto);
+    delay(16);
+  }
+  tft.fillScreen(TFT_BLACK);
 }
 
 static uint32_t my_tick(void)
@@ -2889,7 +3036,7 @@ void hal_setup()
 
   lv_rand_set_seed(millis());
 
-  navigateInfo("Navigation", "Chronos", "Start navigation on Google maps");
+  navigateInfo("Navegación · Desconectado", "Navi Moto", "Inicia la navegación en Google Maps");
 
   watch.clearNotifications();
   notificationsUpdate = false;
@@ -2900,7 +3047,7 @@ void hal_setup()
   lv_obj_set_height(info, LV_SIZE_CONTENT); /// 1
   lv_label_set_long_mode(info, LV_LABEL_LONG_WRAP);
   lv_obj_set_style_text_font(info, &lv_font_montserrat_14, LV_PART_MAIN | LV_STATE_DEFAULT);
-  lv_label_set_text(info, "No hay notificaciones disponibles. Conecta el reloj con la app Chronos Companion en tu celular");
+  lv_label_set_text(info, "No hay notificaciones disponibles. Conecta el navegador con la app Navi Moto en tu celular");
 
   // Positioned top-mid (not top-right) with a modest offset: this is a round display,
   // so a literal screen corner (e.g. TOP_RIGHT with a small inset) falls outside the
@@ -3105,6 +3252,103 @@ void hal_loop()
                        pendingMusicPlaying ? &ui_img_pause_png : &ui_img_play_png);
     }
 
+#ifdef ENABLE_APP_NAVIGATION
+    // Street packets first, in arrival order, so a frame arriving with them already sees
+    // the streets it is meant to place.
+    for (;;)
+    {
+      int len = -1;
+      portENTER_CRITICAL(&streetMux);
+      if (streetQCount > 0)
+      {
+        len = streetQLen[streetQHead];
+        if (len > 0)
+          memcpy(streetBuf, streetQ[streetQHead], len);
+        streetQHead = (streetQHead + 1) % STREET_Q;
+        streetQCount--;
+      }
+      portEXIT_CRITICAL(&streetMux);
+      if (len < 0)
+        break;
+      if (len == 0)
+        navStreetsClear();
+      else
+        navStreetsAdd(streetBuf, len);
+    }
+
+    if (routeFramePending)
+    {
+      int16_t xy[ROUTE_MAX_POINTS * 2];
+      int n, speed, limit;
+      bool poseValid;
+      int32_t poseX, poseY;
+      int poseHdg, poseScale;
+      portENTER_CRITICAL(&routeMux);
+      n = pendingRouteN;
+      speed = pendingRouteSpeed;
+      limit = pendingRouteLimit;
+      memcpy(xy, pendingRouteXY, sizeof(int16_t) * 2 * n);
+      poseValid = pendingPoseValid;
+      poseX = pendingPoseX;
+      poseY = pendingPoseY;
+      poseHdg = pendingPoseHdg;
+      poseScale = pendingPoseScale;
+      routeFramePending = false;
+      portEXIT_CRITICAL(&routeMux);
+      navRouteFrame(xy, n, speed, limit);
+      navStreetsPose(poseValid, poseX, poseY, poseHdg, poseScale);
+      lastRouteFrameMs = millis();
+      routeShown = true;
+    }
+
+#ifdef ENABLE_APP_NAVIGATION
+    // Idle return to navigation (see navWasActive). lastActivityMs is refreshed by every
+    // touch and button press (screen_on()).
+    if (navSwitch && nav.active && get_nav_screen() != NULL)
+    {
+      lv_obj_t *scr = lv_screen_active();
+      // navReturnAtMs: lv_screen_active() keeps reporting the old screen until the load
+      // animation actually swaps, so without a cool-down this loop would re-request the
+      // load on every pass for those ~300 ms.
+      if (scr != get_nav_screen() && scr != ui_callScreen &&
+          millis() - lastActivityMs > NAV_RETURN_IDLE_MS && millis() - navReturnAtMs > 2000)
+      {
+        navReturnAtMs = millis();
+        // lastActScr deliberately untouched: it is where to go when navigation ENDS, set
+        // when it started. And a pending "control panel returns to navigation" request is
+        // moot once we're back on navigation - clear it so a later panel opened from the
+        // watch face returns to the face.
+        ui_controlReturnScreen = NULL;
+        lv_screen_load_anim(get_nav_screen(), LV_SCR_LOAD_ANIM_FADE_IN, 300, 0, false);
+        gameActive = true;
+      }
+    }
+#endif
+
+    if (mapsSpeedPending)
+    {
+      mapsSpeedPending = false;
+      // Route frames own the readout while route mode is up.
+      if (!routeShown)
+      {
+        navSpeedLimit(pendingMapsSpeed, pendingMapsLimit);
+        mapsSpeedShown = pendingMapsSpeed < 255 || pendingMapsLimit > 0;
+      }
+      lastMapsSpeedMs = millis();
+    }
+    if (mapsSpeedShown && !routeShown && millis() - lastMapsSpeedMs > MAPS_SPEED_STALE_MS)
+    {
+      navSpeedLimit(255, 0);
+      mapsSpeedShown = false;
+    }
+    if (routeShown && (routeClearPending || millis() - lastRouteFrameMs > ROUTE_STALE_MS))
+    {
+      navRouteMode(false);
+      routeShown = false;
+    }
+    routeClearPending = false;
+#endif
+
     lv_timer_handler(); // Update the UI-
     delay(5);
 
@@ -3176,13 +3420,20 @@ void hal_loop()
       if (!nav.active)
       {
         nav.directions = "Inicia la navegación en Google Maps";
-        nav.title = "Chronos";
+        nav.title = "Navi Moto";
         nav.duration = watch.isConnected() ? "Inactiva" : "Desconectado";
         nav.eta = "Navegación";
         nav.distance = "";
         navIcCRC = 0xFFFFFFFF;
         turnLegStartM = -1;
         turnLastM = -1;
+#ifdef ENABLE_APP_NAVIGATION
+        if (routeShown)
+        {
+          navRouteMode(false);
+          routeShown = false;
+        }
+#endif
       }
 
       if (!nav.isNavigation)
@@ -3213,7 +3464,9 @@ void hal_loop()
       }
 
 #ifdef ENABLE_APP_NAVIGATION
-      if (actScr != get_nav_screen() && nav.active && navSwitch)
+      bool navStarting = nav.active && !navWasActive;
+      navWasActive = nav.active;
+      if (actScr != get_nav_screen() && actScr != ui_callScreen && navStarting && navSwitch)
       {
         lastActScr = actScr;
         if (!get_nav_screen())
@@ -3233,6 +3486,7 @@ void hal_loop()
       navIconState(nav.active && nav.hasIcon);
       navTurnProgress(turnPct);
       navigateInfo(navText.c_str(), nav.title.c_str(), nav.directions.c_str());
+      navRouteRemaining(nav.distance.c_str());
     }
     if (navIcChanged)
     {

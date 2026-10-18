@@ -33,7 +33,11 @@
 #define NOTIF_TEXT_FONT LV_FONT_DEFAULT
 #endif
 
-const char *ui_info_text = "v" UI_VERSION " [fbiego]";
+/* About screen. The upstream author is credited as the base (the project is MIT and its
+   copyright headers stay in the sources); the product shown is Navi Moto. */
+/* "Mapas": the route mode's streets come from OpenStreetMap, whose licence (ODbL) asks
+   for this credit. */
+const char *ui_info_text = "Navi Moto v" UI_VERSION "\nBase: fbiego (MIT)\nMapas: OpenStreetMap";
 
 ///////////////////// VARIABLES ////////////////////
 void pulseCall_Animation(lv_obj_t *TargetObject, int delay);
@@ -144,6 +148,7 @@ lv_obj_t *ui_kenyaIcon;
 lv_obj_t *ui_kenyaText;
 void ui_event_controlScreen(lv_event_t *e);
 lv_obj_t *ui_controlScreen;
+lv_obj_t *ui_controlReturnScreen = NULL;
 lv_obj_t *ui_controlPanel;
 lv_obj_t *ui_controlTitle;
 void ui_event_musicPlayButton(lv_event_t *e);
@@ -343,7 +348,7 @@ const lv_image_dsc_t *weatherNtIcons[] = {
     &ui_img_229832986, // assets\nt-7.png
 };
 
-const char *qrNames[9] = {"Chronos", "Wechat", "Facebook", "QQ", "X (Twitter)", "Whatsapp", "Wechat Pay", "Alipay", "Paypal"};
+const char *qrNames[9] = {"Navi Moto", "Wechat", "Facebook", "QQ", "X (Twitter)", "Whatsapp", "Wechat Pay", "Alipay", "Paypal"};
 const char *days[7] = {"DOM", "LUN", "MAR", "MIÉ", "JUE", "VIE", "SÁB"};
 
 ///////////////////// TEST LVGL SETTINGS ////////////////////
@@ -1105,7 +1110,11 @@ void ui_event_controlScreen(lv_event_t *e)
       lv_obj_t *target = lv_event_get_target(e);
       if (event_code == LV_EVENT_GESTURE && lv_indev_get_gesture_dir(lv_indev_active()) == LV_DIR_TOP)
       {
-            _ui_screen_change(ui_home, LV_SCR_LOAD_ANIM_OUT_TOP, 500, 0);
+            // Return to whoever opened us (navigation pulls the panel down to adjust the
+            // volume mid-ride and must land back on its own screen), else the watch face.
+            lv_obj_t *back = ui_controlReturnScreen ? ui_controlReturnScreen : ui_home;
+            ui_controlReturnScreen = NULL;
+            _ui_screen_change(back, LV_SCR_LOAD_ANIM_OUT_TOP, 500, 0);
             _ui_state_modify(ui_phoneSearchButton, LV_STATE_CHECKED, _UI_MODIFY_STATE_ADD);
 
             onEndSearch(e);
@@ -2687,7 +2696,7 @@ void ui_weatherScreen_screen_init(void)
       lv_obj_set_width(ui_forecastPlaceholder, UI_SCALE_PX(180));
       lv_obj_set_height(ui_forecastPlaceholder, LV_SIZE_CONTENT); /// 1
       lv_obj_set_align(ui_forecastPlaceholder, LV_ALIGN_CENTER);
-      lv_label_set_text(ui_forecastPlaceholder, "La información del clima aún no se ha sincronizado. Conecta el dispositivo a la app Chronos para obtener el clima. Asegúrate de habilitarlo en los ajustes de la app.");
+      lv_label_set_text(ui_forecastPlaceholder, "La información del clima aún no se ha sincronizado. Conecta el dispositivo a la app Navi Moto para obtener el clima. Asegúrate de habilitarlo en los ajustes de la app.");
 
       ui_hourlyList = lv_obj_create(ui_weatherScreen);
       lv_obj_set_width(ui_hourlyList, lv_pct(100));
@@ -2711,7 +2720,7 @@ void ui_weatherScreen_screen_init(void)
       lv_obj_set_width(ui_hourlyPlaceholder, UI_SCALE_PX(180));
       lv_obj_set_height(ui_hourlyPlaceholder, LV_SIZE_CONTENT); /// 1
       lv_obj_set_align(ui_hourlyPlaceholder, LV_ALIGN_CENTER);
-      lv_label_set_text(ui_hourlyPlaceholder, "La información del clima aún no se ha sincronizado. Conecta el dispositivo a la app Chronos para obtener el clima. Asegúrate de habilitarlo en los ajustes de la app.");
+      lv_label_set_text(ui_hourlyPlaceholder, "La información del clima aún no se ha sincronizado. Conecta el dispositivo a la app Navi Moto para obtener el clima. Asegúrate de habilitarlo en los ajustes de la app.");
 
       lv_obj_add_event_cb(ui_forecastList, onScroll, LV_EVENT_SCROLL, NULL);
       lv_obj_add_event_cb(ui_weatherScreen, ui_event_weatherScreen, LV_EVENT_ALL, NULL);
@@ -2749,7 +2758,8 @@ void ui_appListScreen_screen_init(void)
 #endif
       add_appList("Aplicaciones", 7, &ui_img_game_icon_png);
       add_appList("Esferas", 5, &ui_img_smartwatch_png);
-      add_appList("Códigos QR", 4, &ui_img_qr_icon_png);
+      // "Códigos QR" removed from the list: the screen was fed by the official Chronos app,
+      // which this project replaced - only the upstream author's hard-coded links were left.
       add_appList("Ajustes", 2, &ui_img_general_settings_png);
 
       lv_obj_add_event_cb(ui_appList, onScroll, LV_EVENT_SCROLL, NULL);
@@ -2826,7 +2836,7 @@ void ui_notificationScreen_screen_init(void)
       lv_obj_set_width(ui_messageContent, UI_SCALE_PX(180));
       lv_obj_set_height(ui_messageContent, LV_SIZE_CONTENT); /// 1
       lv_obj_set_align(ui_messageContent, LV_ALIGN_CENTER);
-      lv_label_set_text(ui_messageContent, "Conecta el reloj con la app Chronos Companion en tu celular para recibir notificaciones");
+      lv_label_set_text(ui_messageContent, "Conecta el navegador con la app Navi Moto en tu celular para recibir notificaciones");
 
       ui_messageList = lv_obj_create(ui_notificationScreen);
       lv_obj_set_width(ui_messageList, lv_pct(100));
@@ -3362,7 +3372,7 @@ void ui_settingsScreen_screen_init(void)
       lv_obj_set_height(ui_aboutText, LV_SIZE_CONTENT); /// 1
       lv_obj_set_x(ui_aboutText, UI_SCALE_PX(60));
       lv_obj_set_y(ui_aboutText, UI_SCALE_PX(7));
-      lv_label_set_text(ui_aboutText, "v4.0 (fbiego)\nESP32 C3 Mini\n11:22:33:44:55:66");
+      lv_label_set_text(ui_aboutText, "Navi Moto");
 
       ui_kenyaPanel = lv_obj_create(ui_settingsList);
       lv_obj_set_width(ui_kenyaPanel, UI_SCALE_PX(200));
@@ -3699,6 +3709,7 @@ void ui_controlScreen_screen_init(void)
       lv_obj_add_event_cb(ui_volumeUpButton, ui_event_volumeUpButton, LV_EVENT_ALL, NULL);
       lv_obj_add_event_cb(ui_volumeDownButton, ui_event_volumeDownButton, LV_EVENT_ALL, NULL);
       lv_obj_add_event_cb(ui_qrCodeButton, ui_event_qrCodeButton, LV_EVENT_ALL, NULL);
+      lv_obj_add_flag(ui_qrCodeButton, LV_OBJ_FLAG_HIDDEN); // QR screen retired, see the app list
       lv_obj_add_event_cb(ui_closeControlButton, ui_event_closeControlButton, LV_EVENT_ALL, NULL);
       lv_obj_add_event_cb(ui_controlScreen, ui_event_controlScreen, LV_EVENT_ALL, NULL);
 }
@@ -3776,7 +3787,7 @@ void ui_appInfoScreen_screen_init(void)
       lv_obj_set_height(ui_appDetailsText, LV_SIZE_CONTENT); /// 1
       lv_obj_set_x(ui_appDetailsText, UI_SCALE_PX(43));
       lv_obj_set_y(ui_appDetailsText, UI_SCALE_PX(8));
-      lv_label_set_text(ui_appDetailsText, "Chronos Companion");
+      lv_label_set_text(ui_appDetailsText, "Navi Moto");
       lv_obj_set_style_text_font(ui_appDetailsText, &lv_font_montserrat_14, LV_PART_MAIN | LV_STATE_DEFAULT);
 
       ui_appConnectionPanel = lv_obj_create(ui_appInfoPanel);
@@ -3997,13 +4008,7 @@ void ui_qrScreen_screen_init(void)
 
 #if LV_USE_QRCODE == 1
 
-      addQrList(0, "https://chronos.ke/");
-      addQrList(1, "https://www.youtube.com/c/fbiego");
-      addQrList(2, "https://play.google.com/store/apps/details?id=com.fbiego.chronos");
-      addQrList(3, "https://github.com/fbiego/esp32-c3-mini");
-      addQrList(4, "https://x.com/chronos_app");
-      addQrList(5, "https://felix.fbiego.com");
-      addQrList(6, "https://www.linkedin.com/in/fbiego/");
+      // (upstream hard-coded QR links removed - see the app list note)
       addQrList(7, "https://ko-fi.com/fbiego");
       addQrList(8, "https://www.paypal.com/paypalme/biego");
 
@@ -4113,12 +4118,16 @@ void ui_connectScreen_screen_init(void)
       lv_obj_set_x(ui_connectText, 0);
       lv_obj_set_y(ui_connectText, UI_SCALE_PX(25));
       lv_obj_set_align(ui_connectText, LV_ALIGN_TOP_MID);
-      lv_label_set_text(ui_connectText, "Descargar Chronos");
+      lv_label_set_text(ui_connectText, "Abre la app Navi Moto en tu celular y toca «Conectar»");
+      lv_obj_set_style_text_align(ui_connectText, LV_TEXT_ALIGN_CENTER, LV_PART_MAIN | LV_STATE_DEFAULT);
+      lv_obj_set_align(ui_connectText, LV_ALIGN_CENTER);
+      lv_obj_set_y(ui_connectText, 0);
       lv_obj_set_style_text_font(ui_connectText, &lv_font_montserrat_16, LV_PART_MAIN | LV_STATE_DEFAULT);
 
 #if LV_USE_QRCODE == 1
-      const char *connect = "https://play.google.com/store/apps/details?id=com.fbiego.chronos";
-      lv_qrcode_update(ui_connectImage, connect, strlen(connect));
+      // The QR used to point at the official Chronos app on Google Play - the app this
+      // project replaced. Hidden instead: there is no store listing for Navi Moto.
+      lv_obj_add_flag(ui_connectImage, LV_OBJ_FLAG_HIDDEN);
 #else
       lv_label_set_text(ui_connectText, "La función QR está deshabilitada. (No se encontró la definición LV_USE_QRCODE)");
 #endif

@@ -9,8 +9,11 @@
     For a copy, see <https://opensource.org/licenses/MIT>.
 */
 
+#include <string.h>
+#include <math.h>
 #include "navigation.h"
 #include "../../common/api.h"
+#include "../../ui/ui.h"
 #include "../../../hal/esp32/displays/pins.h"
 
 #ifdef ENABLE_APP_NAVIGATION
@@ -45,6 +48,274 @@ lv_obj_t *ui_navIconCanvas;
 lv_obj_t *ui_navIcon;
 lv_obj_t *ui_navTitle;
 static lv_obj_t *ui_navRing;
+
+/* ---- Route mode (0xC5) -------------------------------------------------------------
+   The phone sends the road ahead as a rider-relative polyline already in watch pixels;
+   this file only offsets it by where the rider is drawn and strokes it. While frames
+   arrive, the screen switches to a Beeline-style layout: road in the upper ~60%, rider
+   chevron, turn arrow + distance side by side underneath. navRouteMode(false) puts every
+   moved widget back exactly where ui_navScreen_screen_init placed it - the positions
+   are shared through these macros so the two can never drift apart. */
+#define NAV_PANEL_W UI_SCALE_PX(240)
+#define NAV_CANVAS_X (-8)
+#define NAV_CANVAS_Y UI_SCALE_PX(36)
+// Idle logo (96x52) centred in the 96x96 band the turn arrow uses.
+#define NAV_LOGO_Y (UI_SCALE_PX(36) + (CANVAS_HEIGHT - 52) / 2)
+#define NAV_DIST_X 0
+#define NAV_DIST_Y UI_SCALE_PX(106)
+#define ROUTE_RIDER_X (NAV_PANEL_W / 2)
+/* Rider marker at ~65% height, as on BaRing: road ahead fills the top, the stats band
+   sits under a separator below it. */
+#define ROUTE_RIDER_Y ((NAV_PANEL_W * 65) / 100)
+#define ROUTE_MAX_POINTS 32
+#define ROUTE_LINE_W 14
+
+/* Route-mode layout on the 466 px panel, measured off BaRing's own screen (scaled from
+   its ~330 px dial): turn box top-left, speed left, limit sign right, separator, then
+   remaining distance. Absolute panel coordinates. */
+#define RB_X 79
+#define RB_Y 78
+#define RB_W 127
+#define RB_H 158
+#define RB_COLOR 0x1E5BB8
+#define RB_CANVAS_X (RB_X + (RB_W - CANVAS_WIDTH) / 2)
+#define RB_CANVAS_Y (RB_Y + 8)
+#define RT_SEP_Y 328
+
+/* Speed readout and limit sign are shared by both layouts, at different places
+   (offsets from the panel centre):
+   - route mode: either side of the rider marker, BaRing-style;
+   - Google Maps mode: either side of the turn arrow at the top, the free band there. */
+#define SPD_ROUTE_X (-135)
+#define SPD_ROUTE_Y 49
+#define LIM_ROUTE_X 133
+#define LIM_ROUTE_Y 47
+#define SPD_MAPS_X (-138)
+#define SPD_MAPS_Y (NAV_CANVAS_Y + CANVAS_HEIGHT / 2 - NAV_PANEL_W / 2)
+#define LIM_MAPS_X 140
+#define LIM_MAPS_Y SPD_MAPS_Y
+
+static lv_obj_t *ui_navRouteLine;
+static lv_obj_t *ui_navRider;
+static lv_obj_t *ui_routeBox;
+static lv_obj_t *ui_routeTurnNum;
+static lv_obj_t *ui_routeTurnUnit;
+static lv_obj_t *ui_routeSpeed;
+static lv_obj_t *ui_routeLimit;
+static lv_obj_t *ui_routeLimitText;
+static lv_obj_t *ui_routeSep;
+static lv_obj_t *ui_routeRemainLabel;
+static lv_obj_t *ui_routeRemainRow;
+static lv_obj_t *ui_routeRemainNum;
+static lv_obj_t *ui_routeRemainUnit;
+static lv_point_precise_t routePts[ROUTE_MAX_POINTS];
+static bool routeMode = false;
+
+/* ---- Street layer (0xC7) -----------------------------------------------------------
+   OpenStreetMap streets around the route, drawn faint under the route line. Unlike the
+   route line they are NOT re-sent every second: the phone uploads each street once, in a
+   fixed metric frame (x east, y north, metres), and every route frame carries the rider's
+   pose in that frame. This file turns the streets heading-up around the rider exactly the
+   way the phone turns the route line (Polyline.frameAt), so the two line up. Storage is
+   allocated on first use with lv_malloc, i.e. PSRAM. When it is full, new streets are
+   ignored - the phone tracks the same limits and sends a clear first. */
+#define ST_MAX_PTS 8000
+#define ST_MAX_POLYS 2000
+/* Farther than any visible corner of the road area at 0.6 px/m. */
+#define ST_VIEW_RADIUS_M 750
+static int32_t *stX, *stY;
+static lv_point_precise_t *stScr;
+static uint16_t *stStart;
+static uint8_t *stLen, *stCls, *stVis;
+static int32_t *stCx, *stCy, *stR;
+static int stPolys = 0, stPts = 0;
+static bool stPoseValid = false;
+static int32_t stPoseX, stPoseY; /* decimetres */
+static int stPoseHdg, stPoseScale;
+static lv_obj_t *ui_navStreets;
+
+static bool streetsAlloc(void)
+{
+    if (stX)
+        return true;
+    stX = lv_malloc(sizeof(int32_t) * ST_MAX_PTS);
+    stY = lv_malloc(sizeof(int32_t) * ST_MAX_PTS);
+    stScr = lv_malloc(sizeof(lv_point_precise_t) * ST_MAX_PTS);
+    stStart = lv_malloc(sizeof(uint16_t) * ST_MAX_POLYS);
+    stLen = lv_malloc(ST_MAX_POLYS);
+    stCls = lv_malloc(ST_MAX_POLYS);
+    stVis = lv_malloc(ST_MAX_POLYS);
+    stCx = lv_malloc(sizeof(int32_t) * ST_MAX_POLYS);
+    stCy = lv_malloc(sizeof(int32_t) * ST_MAX_POLYS);
+    stR = lv_malloc(sizeof(int32_t) * ST_MAX_POLYS);
+    if (stX && stY && stScr && stStart && stLen && stCls && stVis && stCx && stCy && stR)
+        return true;
+    lv_free(stX); lv_free(stY); lv_free(stScr); lv_free(stStart); lv_free(stLen);
+    lv_free(stCls); lv_free(stVis); lv_free(stCx); lv_free(stCy); lv_free(stR);
+    stX = NULL;
+    return false;
+}
+
+static int32_t rd32(const uint8_t *p)
+{
+    return (int32_t)(((uint32_t)p[0] << 24) | ((uint32_t)p[1] << 16) | ((uint32_t)p[2] << 8) | p[3]);
+}
+
+/* Streets -> panel pixels for the current pose. Same maths as the phone's
+   Polyline.frameAt: forward = d.(sin h, cos h), right = d.(cos h, -sin h). */
+static void streetsProject(void)
+{
+    if (!stPoseValid || stPolys == 0)
+        return;
+    float rx = stPoseX / 10.0f, ry = stPoseY / 10.0f;
+    float h = stPoseHdg * 0.01f * 3.14159265f / 180.0f;
+    float sn = sinf(h), cs = cosf(h), sc = stPoseScale / 100.0f;
+    for (int k = 0; k < stPolys; k++)
+    {
+        float cdx = stCx[k] - rx, cdy = stCy[k] - ry, lim = (float)(ST_VIEW_RADIUS_M + stR[k]);
+        stVis[k] = (cdx * cdx + cdy * cdy) <= lim * lim;
+        if (!stVis[k])
+            continue;
+        for (int i = stStart[k]; i < stStart[k] + stLen[k]; i++)
+        {
+            float dx = stX[i] - rx, dy = stY[i] - ry;
+            float fwd = dx * sn + dy * cs;
+            float right = dx * cs - dy * sn;
+            stScr[i].x = ROUTE_RIDER_X + (int32_t)lroundf(right * sc);
+            stScr[i].y = ROUTE_RIDER_Y - (int32_t)lroundf(fwd * sc);
+        }
+    }
+}
+
+/* Round-capped, well below the white 14 px route line. Minor streets first so the bigger
+   roads draw over them at junctions. Segments wholly off one side of the object are
+   skipped - each one drawn is a draw task.
+   Colours: the first set (0x3A/0x4A/0x5C greys, 3/5/7 px) was invisible in daylight on
+   the first ride; now a lighter, slightly blue grey, one pixel wider - still clearly
+   darker and thinner than the route, so the road to follow stands out. */
+static void streets_draw_cb(lv_event_t *e)
+{
+    if (!stPoseValid || stPolys == 0)
+        return;
+    static const uint8_t widths[3] = {4, 6, 8};
+    static const uint32_t colors[3] = {0x6E7885, 0x8D97A3, 0xAAB3BE};
+    lv_layer_t *layer = lv_event_get_layer(e);
+    lv_obj_t *obj = lv_event_get_current_target(e);
+    lv_area_t a;
+    lv_obj_get_coords(obj, &a);
+    int32_t w = lv_area_get_width(&a), hgt = lv_area_get_height(&a);
+    lv_draw_line_dsc_t d;
+    lv_draw_line_dsc_init(&d);
+    d.round_start = 1;
+    d.round_end = 1;
+    d.opa = LV_OPA_COVER;
+    for (int cls = 0; cls < 3; cls++)
+    {
+        d.width = widths[cls];
+        d.color = lv_color_hex(colors[cls]);
+        for (int k = 0; k < stPolys; k++)
+        {
+            if (!stVis[k] || stCls[k] != cls)
+                continue;
+            for (int i = stStart[k]; i < stStart[k] + stLen[k] - 1; i++)
+            {
+                lv_point_precise_t p1 = stScr[i], p2 = stScr[i + 1];
+                if ((p1.x < 0 && p2.x < 0) || (p1.x > w && p2.x > w) ||
+                    (p1.y < 0 && p2.y < 0) || (p1.y > hgt && p2.y > hgt))
+                    continue;
+                d.p1.x = p1.x + a.x1;
+                d.p1.y = p1.y + a.y1;
+                d.p2.x = p2.x + a.x1;
+                d.p2.y = p2.y + a.y1;
+                lv_draw_line(layer, &d);
+            }
+        }
+    }
+}
+
+/* Over-speed warning, BaRing-style: a red glow around the whole dial plus the speed in
+   red. The glow is concentric red rings - an opaque band at the rim, then thin rings
+   fading inward - plain borders, no blur or gradient work for the CPU. Started with three
+   rings; on the panel they read as separate stripes, so it is now 1 + 7 thin steps. Hysteresis because GPS speed wobbles ~2 km/h: on
+   above limit+2, off only back at or under the limit, so riding right at the limit
+   doesn't make the whole screen flash. */
+#define ROUTE_GLOW_RINGS 6
+#define OVERSPEED_ON_MARGIN 2
+#define ROUTE_RED 0xE0262B
+static lv_obj_t *ui_routeGlow[ROUTE_GLOW_RINGS];
+static bool overspeed = false;
+
+static void setOverspeed(bool on)
+{
+    overspeed = on;
+    for (int i = 0; i < ROUTE_GLOW_RINGS; i++)
+    {
+        if (on) lv_obj_remove_flag(ui_routeGlow[i], LV_OBJ_FLAG_HIDDEN);
+        else lv_obj_add_flag(ui_routeGlow[i], LV_OBJ_FLAG_HIDDEN);
+    }
+    lv_obj_set_style_text_color(ui_routeSpeed, lv_color_hex(on ? 0xFF3B30 : 0xFFFFFF),
+                                LV_PART_MAIN | LV_STATE_DEFAULT);
+    // The amber turn ring steps aside for the warning, and comes back with it gone (only
+    // if a turn icon is showing - the same rule navIconState applies).
+    if (on) lv_obj_add_flag(ui_navRing, LV_OBJ_FLAG_HIDDEN);
+    else if (!lv_obj_has_flag(ui_navIconCanvas, LV_OBJ_FLAG_HIDDEN)) lv_obj_remove_flag(ui_navRing, LV_OBJ_FLAG_HIDDEN);
+}
+
+/* "170 m" -> "170" + "m", so the unit can be drawn smaller, BaRing-style. */
+static void setSplit(lv_obj_t *num, lv_obj_t *unit, const char *text)
+{
+    const char *sp = strrchr(text, ' ');
+    if (sp == NULL)
+    {
+        lv_label_set_text(num, text);
+        lv_label_set_text(unit, "");
+        return;
+    }
+    lv_label_set_text_fmt(num, "%.*s", (int)(sp - text), text);
+    lv_label_set_text(unit, sp + 1);
+}
+
+/* A row of [big number][small unit], rendered larger as a whole. The scale is put on the
+   ROW, not the number: a flex row lays out unscaled sizes, so scaling one child would
+   make it overlap its unit. Not clickable - transform_scale breaks touch hit-areas on
+   this board (pins.h), harmless on pure readouts. */
+static lv_obj_t *makeNumberRow(lv_obj_t *parent, lv_obj_t **num, lv_obj_t **unit, int scale)
+{
+    lv_obj_t *row = lv_obj_create(parent);
+    lv_obj_set_size(row, LV_SIZE_CONTENT, LV_SIZE_CONTENT);
+    lv_obj_set_style_bg_opa(row, 0, LV_PART_MAIN | LV_STATE_DEFAULT);
+    lv_obj_set_style_border_width(row, 0, LV_PART_MAIN | LV_STATE_DEFAULT);
+    lv_obj_set_style_pad_all(row, 0, LV_PART_MAIN | LV_STATE_DEFAULT);
+    lv_obj_set_style_pad_column(row, 4, LV_PART_MAIN | LV_STATE_DEFAULT);
+    lv_obj_remove_flag(row, LV_OBJ_FLAG_SCROLLABLE);
+    lv_obj_remove_flag(row, LV_OBJ_FLAG_CLICKABLE);
+    lv_obj_set_flex_flow(row, LV_FLEX_FLOW_ROW);
+    lv_obj_set_flex_align(row, LV_FLEX_ALIGN_CENTER, LV_FLEX_ALIGN_END, LV_FLEX_ALIGN_END);
+    lv_obj_set_style_transform_pivot_x(row, LV_PCT(50), LV_PART_MAIN | LV_STATE_DEFAULT);
+    lv_obj_set_style_transform_pivot_y(row, LV_PCT(50), LV_PART_MAIN | LV_STATE_DEFAULT);
+    lv_obj_set_style_transform_scale_x(row, scale, LV_PART_MAIN | LV_STATE_DEFAULT);
+    lv_obj_set_style_transform_scale_y(row, scale, LV_PART_MAIN | LV_STATE_DEFAULT);
+
+    *num = lv_label_create(row);
+    lv_obj_set_style_text_font(*num, &lv_font_montserrat_30, LV_PART_MAIN | LV_STATE_DEFAULT);
+    lv_obj_set_style_text_color(*num, lv_color_hex(0xFFFFFF), LV_PART_MAIN | LV_STATE_DEFAULT);
+    lv_label_set_text(*num, "");
+    *unit = lv_label_create(row);
+    lv_obj_set_style_text_font(*unit, &lv_font_montserrat_20, LV_PART_MAIN | LV_STATE_DEFAULT);
+    lv_obj_set_style_text_color(*unit, lv_color_hex(0xFFFFFF), LV_PART_MAIN | LV_STATE_DEFAULT);
+    lv_obj_set_style_pad_bottom(*unit, 3, LV_PART_MAIN | LV_STATE_DEFAULT);
+    lv_label_set_text(*unit, "");
+    return row;
+}
+
+static void hideAll(lv_obj_t **objs, int n, bool hide)
+{
+    for (int i = 0; i < n; i++)
+    {
+        if (hide) lv_obj_add_flag(objs[i], LV_OBJ_FLAG_HIDDEN);
+        else lv_obj_remove_flag(objs[i], LV_OBJ_FLAG_HIDDEN);
+    }
+}
 
 /* Exit confirmation: a right-to-left swipe reveals this layer with one big "Salir" button;
    tapping it ends the Maps navigation. Two steps on purpose - a swipe alone was judged
@@ -144,6 +415,15 @@ void ui_event_navScreen(lv_event_t *e)
         {
             showNavExitLayer();
         }
+        // Swipe down pulls in the control panel (music, volume), same gesture as on the
+        // watch face. The panel is told to come back HERE on swipe-up rather than to the
+        // face, so adjusting the volume mid-ride is down, adjust, up - never a trip
+        // through the app list to find navigation again.
+        if (dir == LV_DIR_BOTTOM && !exitShown)
+        {
+            ui_controlReturnScreen = ui_navScreen;
+            lv_screen_load_anim(ui_controlScreen, LV_SCR_LOAD_ANIM_OVER_BOTTOM, 500, 0, false);
+        }
     }
 }
 
@@ -204,6 +484,149 @@ void ui_navScreen_screen_init()
     lv_obj_set_style_arc_color(ui_navRing, lv_color_hex(0xEF9F27), LV_PART_INDICATOR | LV_STATE_DEFAULT);
     lv_obj_set_style_arc_rounded(ui_navRing, true, LV_PART_INDICATOR | LV_STATE_DEFAULT);
 
+    // Street layer: under the route line, and only over the road area - cut at the
+    // separator so nothing runs behind the remaining-distance band.
+    ui_navStreets = lv_obj_create(ui_navPanel);
+    lv_obj_remove_style_all(ui_navStreets);
+    lv_obj_set_pos(ui_navStreets, 0, 0);
+    lv_obj_set_size(ui_navStreets, NAV_PANEL_W, RT_SEP_Y);
+    lv_obj_remove_flag(ui_navStreets, LV_OBJ_FLAG_CLICKABLE);
+    lv_obj_remove_flag(ui_navStreets, LV_OBJ_FLAG_SCROLLABLE);
+    lv_obj_add_event_cb(ui_navStreets, streets_draw_cb, LV_EVENT_DRAW_MAIN, NULL);
+    lv_obj_add_flag(ui_navStreets, LV_OBJ_FLAG_HIDDEN);
+
+    // Route view: created right after the ring so it draws above it but below every
+    // label. Both cover the whole panel with absolute coordinates; nothing is clipped to
+    // the circle on purpose - pixels outside it simply don't exist on this round panel.
+    ui_navRouteLine = lv_line_create(ui_navPanel);
+    lv_obj_set_size(ui_navRouteLine, NAV_PANEL_W, NAV_PANEL_W);
+    lv_obj_set_pos(ui_navRouteLine, 0, 0);
+    lv_obj_remove_flag(ui_navRouteLine, LV_OBJ_FLAG_CLICKABLE);
+    lv_obj_set_style_line_width(ui_navRouteLine, ROUTE_LINE_W, LV_PART_MAIN | LV_STATE_DEFAULT);
+    lv_obj_set_style_line_color(ui_navRouteLine, lv_color_hex(0xFFFFFF), LV_PART_MAIN | LV_STATE_DEFAULT);
+    lv_obj_set_style_line_rounded(ui_navRouteLine, true, LV_PART_MAIN | LV_STATE_DEFAULT);
+    lv_obj_add_flag(ui_navRouteLine, LV_OBJ_FLAG_HIDDEN);
+
+    // Over-speed glow. Created after the road (draws over it at the rim) and before the
+    // turn box (the box sits over the glow, as on BaRing).
+    // ~30 px in total (was 57 - the user found it too thick). It no longer has to cover
+    // the amber turn ring: setOverspeed() hides the ring while the warning is on.
+    static const lv_opa_t glowOpa[ROUTE_GLOW_RINGS] = {255, 170, 115, 75, 45, 22};
+    static const uint8_t glowInset[ROUTE_GLOW_RINGS] = {0, 10, 14, 18, 22, 26};
+    static const uint8_t glowWidth[ROUTE_GLOW_RINGS] = {10, 4, 4, 4, 4, 4};
+    for (int i = 0; i < ROUTE_GLOW_RINGS; i++)
+    {
+        lv_obj_t *g = lv_obj_create(ui_navPanel);
+        int inset = glowInset[i];
+        lv_obj_set_size(g, NAV_PANEL_W - 2 * inset, NAV_PANEL_W - 2 * inset);
+        lv_obj_center(g);
+        lv_obj_set_style_radius(g, LV_RADIUS_CIRCLE, LV_PART_MAIN | LV_STATE_DEFAULT);
+        lv_obj_set_style_bg_opa(g, 0, LV_PART_MAIN | LV_STATE_DEFAULT);
+        lv_obj_set_style_border_width(g, glowWidth[i], LV_PART_MAIN | LV_STATE_DEFAULT);
+        lv_obj_set_style_border_color(g, lv_color_hex(ROUTE_RED), LV_PART_MAIN | LV_STATE_DEFAULT);
+        lv_obj_set_style_border_opa(g, glowOpa[i], LV_PART_MAIN | LV_STATE_DEFAULT);
+        lv_obj_set_style_pad_all(g, 0, LV_PART_MAIN | LV_STATE_DEFAULT);
+        lv_obj_remove_flag(g, LV_OBJ_FLAG_SCROLLABLE);
+        lv_obj_remove_flag(g, LV_OBJ_FLAG_CLICKABLE);
+        lv_obj_add_flag(g, LV_OBJ_FLAG_HIDDEN);
+        ui_routeGlow[i] = g;
+    }
+
+    // Rider: BaRing's blue navigation arrow (assets/ui_img_nav_rider.c, generated),
+    // centred on the anchor the phone's points are relative to.
+    ui_navRider = lv_image_create(ui_navPanel);
+    lv_image_set_src(ui_navRider, &ui_img_nav_rider);
+    lv_obj_set_pos(ui_navRider, ROUTE_RIDER_X - ui_img_nav_rider.header.w / 2,
+                   ROUTE_RIDER_Y - ui_img_nav_rider.header.h / 2);
+    lv_obj_remove_flag(ui_navRider, LV_OBJ_FLAG_CLICKABLE);
+    lv_obj_add_flag(ui_navRider, LV_OBJ_FLAG_HIDDEN);
+
+    // Turn box. Created BEFORE the icon canvas so the canvas draws on top of it: in route
+    // mode the canvas moves into the box and its palette's "off" entries turn box-blue
+    // (navRouteMode), so the existing 96 px arrow becomes the box's arrow - no second
+    // icon buffer, no second copy of the drawing code.
+    ui_routeBox = lv_obj_create(ui_navPanel);
+    lv_obj_set_pos(ui_routeBox, RB_X, RB_Y);
+    lv_obj_set_size(ui_routeBox, RB_W, RB_H);
+    lv_obj_set_style_radius(ui_routeBox, 18, LV_PART_MAIN | LV_STATE_DEFAULT);
+    lv_obj_set_style_bg_color(ui_routeBox, lv_color_hex(RB_COLOR), LV_PART_MAIN | LV_STATE_DEFAULT);
+    lv_obj_set_style_bg_opa(ui_routeBox, 255, LV_PART_MAIN | LV_STATE_DEFAULT);
+    lv_obj_set_style_border_width(ui_routeBox, 0, LV_PART_MAIN | LV_STATE_DEFAULT);
+    lv_obj_set_style_pad_all(ui_routeBox, 0, LV_PART_MAIN | LV_STATE_DEFAULT);
+    lv_obj_remove_flag(ui_routeBox, LV_OBJ_FLAG_SCROLLABLE);
+    lv_obj_remove_flag(ui_routeBox, LV_OBJ_FLAG_CLICKABLE);
+    lv_obj_t *turnRow = makeNumberRow(ui_routeBox, &ui_routeTurnNum, &ui_routeTurnUnit, 320);
+    lv_obj_align(turnRow, LV_ALIGN_BOTTOM_MID, 0, -14);
+    lv_obj_add_flag(ui_routeBox, LV_OBJ_FLAG_HIDDEN);
+
+    // Current speed, big, left of the rider. From the phone's GPS (route frame byte).
+    ui_routeSpeed = lv_label_create(ui_navPanel);
+    lv_obj_set_align(ui_routeSpeed, LV_ALIGN_CENTER);
+    lv_obj_set_pos(ui_routeSpeed, SPD_MAPS_X, SPD_MAPS_Y);
+    lv_obj_set_style_text_font(ui_routeSpeed, &lv_font_montserrat_30, LV_PART_MAIN | LV_STATE_DEFAULT);
+    lv_obj_set_style_text_color(ui_routeSpeed, lv_color_hex(0xFFFFFF), LV_PART_MAIN | LV_STATE_DEFAULT);
+    lv_obj_set_style_transform_pivot_x(ui_routeSpeed, LV_PCT(50), LV_PART_MAIN | LV_STATE_DEFAULT);
+    lv_obj_set_style_transform_pivot_y(ui_routeSpeed, LV_PCT(50), LV_PART_MAIN | LV_STATE_DEFAULT);
+    lv_obj_set_style_transform_scale_x(ui_routeSpeed, 448, LV_PART_MAIN | LV_STATE_DEFAULT);
+    lv_obj_set_style_transform_scale_y(ui_routeSpeed, 448, LV_PART_MAIN | LV_STATE_DEFAULT);
+    // Opaque black backdrop: the road line can pass right behind the number (it did on
+    // the first over-speed test, crossing the red "58"); this cuts it out so the speed
+    // always reads clean, as BaRing does. Scales with the label's transform.
+    lv_obj_set_style_bg_color(ui_routeSpeed, lv_color_hex(0x000000), LV_PART_MAIN | LV_STATE_DEFAULT);
+    lv_obj_set_style_bg_opa(ui_routeSpeed, 255, LV_PART_MAIN | LV_STATE_DEFAULT);
+    lv_obj_set_style_radius(ui_routeSpeed, 8, LV_PART_MAIN | LV_STATE_DEFAULT);
+    lv_obj_set_style_pad_hor(ui_routeSpeed, 5, LV_PART_MAIN | LV_STATE_DEFAULT);
+    lv_obj_set_style_pad_ver(ui_routeSpeed, 1, LV_PART_MAIN | LV_STATE_DEFAULT);
+    lv_label_set_text(ui_routeSpeed, "");
+    lv_obj_add_flag(ui_routeSpeed, LV_OBJ_FLAG_HIDDEN);
+
+    // Speed-limit sign, right of the rider. Only ever shown with a real value from the
+    // map data (OpenStreetMap maxspeed via the phone); hidden when unknown - never a
+    // made-up number.
+    ui_routeLimit = lv_obj_create(ui_navPanel);
+    lv_obj_set_align(ui_routeLimit, LV_ALIGN_CENTER);
+    lv_obj_set_pos(ui_routeLimit, LIM_MAPS_X, LIM_MAPS_Y);
+    lv_obj_set_size(ui_routeLimit, 66, 66);
+    lv_obj_set_style_radius(ui_routeLimit, LV_RADIUS_CIRCLE, LV_PART_MAIN | LV_STATE_DEFAULT);
+    lv_obj_set_style_bg_color(ui_routeLimit, lv_color_hex(0xFFFFFF), LV_PART_MAIN | LV_STATE_DEFAULT);
+    lv_obj_set_style_bg_opa(ui_routeLimit, 255, LV_PART_MAIN | LV_STATE_DEFAULT);
+    lv_obj_set_style_border_color(ui_routeLimit, lv_color_hex(0xE0262B), LV_PART_MAIN | LV_STATE_DEFAULT);
+    lv_obj_set_style_border_width(ui_routeLimit, 7, LV_PART_MAIN | LV_STATE_DEFAULT);
+    lv_obj_set_style_pad_all(ui_routeLimit, 0, LV_PART_MAIN | LV_STATE_DEFAULT);
+    lv_obj_remove_flag(ui_routeLimit, LV_OBJ_FLAG_SCROLLABLE);
+    lv_obj_remove_flag(ui_routeLimit, LV_OBJ_FLAG_CLICKABLE);
+    ui_routeLimitText = lv_label_create(ui_routeLimit);
+    lv_obj_center(ui_routeLimitText);
+    lv_obj_set_style_text_font(ui_routeLimitText, &lv_font_montserrat_30, LV_PART_MAIN | LV_STATE_DEFAULT);
+    lv_obj_set_style_text_color(ui_routeLimitText, lv_color_hex(0x000000), LV_PART_MAIN | LV_STATE_DEFAULT);
+    lv_obj_set_style_transform_pivot_x(ui_routeLimitText, LV_PCT(50), LV_PART_MAIN | LV_STATE_DEFAULT);
+    lv_obj_set_style_transform_pivot_y(ui_routeLimitText, LV_PCT(50), LV_PART_MAIN | LV_STATE_DEFAULT);
+    lv_label_set_text(ui_routeLimitText, "");
+    lv_obj_add_flag(ui_routeLimit, LV_OBJ_FLAG_HIDDEN);
+
+    // Separator and remaining distance under it.
+    ui_routeSep = lv_obj_create(ui_navPanel);
+    lv_obj_set_pos(ui_routeSep, 70, RT_SEP_Y);
+    lv_obj_set_size(ui_routeSep, NAV_PANEL_W - 140, 2);
+    lv_obj_set_style_radius(ui_routeSep, 0, LV_PART_MAIN | LV_STATE_DEFAULT);
+    lv_obj_set_style_bg_color(ui_routeSep, lv_color_hex(0x3A3A3A), LV_PART_MAIN | LV_STATE_DEFAULT);
+    lv_obj_set_style_bg_opa(ui_routeSep, 255, LV_PART_MAIN | LV_STATE_DEFAULT);
+    lv_obj_set_style_border_width(ui_routeSep, 0, LV_PART_MAIN | LV_STATE_DEFAULT);
+    lv_obj_remove_flag(ui_routeSep, LV_OBJ_FLAG_SCROLLABLE);
+    lv_obj_remove_flag(ui_routeSep, LV_OBJ_FLAG_CLICKABLE);
+    lv_obj_add_flag(ui_routeSep, LV_OBJ_FLAG_HIDDEN);
+
+    ui_routeRemainLabel = lv_label_create(ui_navPanel);
+    lv_obj_align(ui_routeRemainLabel, LV_ALIGN_TOP_MID, 0, RT_SEP_Y + 10);
+    lv_obj_set_style_text_font(ui_routeRemainLabel, &lv_font_montserrat_16, LV_PART_MAIN | LV_STATE_DEFAULT);
+    lv_obj_set_style_text_color(ui_routeRemainLabel, lv_color_hex(0x9A9A9A), LV_PART_MAIN | LV_STATE_DEFAULT);
+    lv_label_set_text(ui_routeRemainLabel, "Distancia restante");
+    lv_obj_add_flag(ui_routeRemainLabel, LV_OBJ_FLAG_HIDDEN);
+
+    ui_routeRemainRow = makeNumberRow(ui_navPanel, &ui_routeRemainNum, &ui_routeRemainUnit, 290);
+    lv_obj_align(ui_routeRemainRow, LV_ALIGN_TOP_MID, 0, RT_SEP_Y + 38);
+    lv_obj_add_flag(ui_routeRemainRow, LV_OBJ_FLAG_HIDDEN);
+
     // No accented font is available above size 20 and flash is scarce, so the labels use
     // a render-only transform_scale to read bigger. Safe here because none of them is a
     // touch target - unlike the music panel's buttons/icon canvas, where the same trick
@@ -211,10 +634,10 @@ void ui_navScreen_screen_init()
     ui_navDistance = lv_label_create(ui_navPanel);
     lv_obj_set_width(ui_navDistance, LV_SIZE_CONTENT);  /// 1
     lv_obj_set_height(ui_navDistance, LV_SIZE_CONTENT); /// 1
-    lv_obj_set_x(ui_navDistance, 0);
-    lv_obj_set_y(ui_navDistance, UI_SCALE_PX(106));
+    lv_obj_set_x(ui_navDistance, NAV_DIST_X);
+    lv_obj_set_y(ui_navDistance, NAV_DIST_Y);
     lv_obj_set_align(ui_navDistance, LV_ALIGN_TOP_MID);
-    lv_label_set_text(ui_navDistance, "Chronos");
+    lv_label_set_text(ui_navDistance, "Navi Moto");
     lv_obj_set_style_text_font(ui_navDistance, &lv_font_montserrat_30, LV_PART_MAIN | LV_STATE_DEFAULT);
     lv_obj_set_style_transform_pivot_x(ui_navDistance, LV_PCT(50), LV_PART_MAIN | LV_STATE_DEFAULT);
     lv_obj_set_style_transform_pivot_y(ui_navDistance, LV_PCT(50), LV_PART_MAIN | LV_STATE_DEFAULT);
@@ -264,8 +687,8 @@ void ui_navScreen_screen_init()
     lv_canvas_set_draw_buf(ui_navIconCanvas, &cbuf);
     lv_obj_set_width(ui_navIconCanvas, CANVAS_WIDTH);
     lv_obj_set_height(ui_navIconCanvas, CANVAS_HEIGHT);
-    lv_obj_set_x(ui_navIconCanvas, -8);
-    lv_obj_set_y(ui_navIconCanvas, UI_SCALE_PX(36));
+    lv_obj_set_x(ui_navIconCanvas, NAV_CANVAS_X);
+    lv_obj_set_y(ui_navIconCanvas, NAV_CANVAS_Y);
     lv_obj_set_align(ui_navIconCanvas, LV_ALIGN_TOP_MID);
     lv_obj_remove_flag(ui_navIconCanvas, LV_OBJ_FLAG_SCROLLABLE); /// Flags
     lv_obj_set_style_radius(ui_navIconCanvas, 0, LV_PART_MAIN | LV_STATE_DEFAULT);
@@ -291,11 +714,11 @@ void ui_navScreen_screen_init()
     // top of this file), which needs no transform.
 
     ui_navIcon = lv_image_create(ui_navPanel);
-    lv_image_set_src(ui_navIcon, &ui_img_chronos_logo_png);
+    lv_image_set_src(ui_navIcon, &ui_img_navimoto_logo);
     lv_obj_set_width(ui_navIcon, LV_SIZE_CONTENT);  /// 1
     lv_obj_set_height(ui_navIcon, LV_SIZE_CONTENT); /// 1
-    lv_obj_set_x(ui_navIcon, -8);
-    lv_obj_set_y(ui_navIcon, UI_SCALE_PX(36) + 16);
+    lv_obj_set_x(ui_navIcon, NAV_CANVAS_X);
+    lv_obj_set_y(ui_navIcon, NAV_LOGO_Y);
     lv_obj_set_align(ui_navIcon, LV_ALIGN_TOP_MID);
     lv_obj_remove_flag(ui_navIcon, LV_OBJ_FLAG_SCROLLABLE); /// Flags
 
@@ -372,7 +795,20 @@ void navigateInfo(const char *text, const char *title, const char *directions)
     lv_label_set_text(ui_navText, text);
     lv_label_set_text(ui_navDirection, directions);
     lv_label_set_text(ui_navDistance, title);
+    // The turn box shows the same distance-to-turn, split so the unit can be smaller.
+    setSplit(ui_routeTurnNum, ui_routeTurnUnit, title);
 
+#endif
+}
+
+/* Remaining distance to the destination for the route-mode bottom band ("13,8 km"). */
+void navRouteRemaining(const char *distance)
+{
+#ifdef ENABLE_APP_NAVIGATION
+    if (!ui_navScreen){
+        return;
+    }
+    setSplit(ui_routeRemainNum, ui_routeRemainUnit, distance);
 #endif
 }
 
@@ -385,15 +821,219 @@ void navIconState(bool show)
     if (show)
     {
         lv_obj_remove_flag(ui_navIconCanvas, LV_OBJ_FLAG_HIDDEN);
-        lv_obj_remove_flag(ui_navRing, LV_OBJ_FLAG_HIDDEN);
+        // The ring shows with a turn icon in both layouts - except during an over-speed
+        // warning, which replaces it (this runs on every nav update, so it must not undo
+        // setOverspeed's hiding).
+        if (!overspeed)
+        {
+            lv_obj_remove_flag(ui_navRing, LV_OBJ_FLAG_HIDDEN);
+        }
         lv_obj_add_flag(ui_navIcon, LV_OBJ_FLAG_HIDDEN);
     }
     else
     {
         lv_obj_add_flag(ui_navIconCanvas, LV_OBJ_FLAG_HIDDEN);
         lv_obj_add_flag(ui_navRing, LV_OBJ_FLAG_HIDDEN);
-        lv_obj_remove_flag(ui_navIcon, LV_OBJ_FLAG_HIDDEN);
+        // The placeholder logo sits where the road is drawn in route mode.
+        if (!routeMode)
+        {
+            lv_obj_remove_flag(ui_navIcon, LV_OBJ_FLAG_HIDDEN);
+        }
     }
+#endif
+}
+
+void navRouteMode(bool on)
+{
+#ifdef ENABLE_APP_NAVIGATION
+    if (!ui_navScreen || on == routeMode){
+        return;
+    }
+    routeMode = on;
+    lv_obj_t *routeOnly[] = {ui_navStreets, ui_navRouteLine, ui_navRider, ui_routeBox, ui_routeSep,
+                             ui_routeRemainLabel, ui_routeRemainRow};
+    // The amber turn ring is shared by both layouts (user's choice: ring + BaRing glow).
+    lv_obj_t *normalOnly[] = {ui_navDirection, ui_navText, ui_navDistance};
+    hideAll(routeOnly, sizeof(routeOnly) / sizeof(routeOnly[0]), !on);
+    hideAll(normalOnly, sizeof(normalOnly) / sizeof(normalOnly[0]), on);
+    // Speed and limit only appear once data says they are known (navSpeedLimit).
+    lv_obj_add_flag(ui_routeSpeed, LV_OBJ_FLAG_HIDDEN);
+    lv_obj_add_flag(ui_routeLimit, LV_OBJ_FLAG_HIDDEN);
+    setOverspeed(false);
+    lv_obj_set_pos(ui_routeSpeed, on ? SPD_ROUTE_X : SPD_MAPS_X, on ? SPD_ROUTE_Y : SPD_MAPS_Y);
+    lv_obj_set_pos(ui_routeLimit, on ? LIM_ROUTE_X : LIM_MAPS_X, on ? LIM_ROUTE_Y : LIM_MAPS_Y);
+
+    // The icon canvas: into the box with a box-blue "off" colour, or back to its normal
+    // place on black. Palette entries 0 and 2 are the "off" pixels (see the note where
+    // the canvas is created).
+    lv_color32_t off = on ? lv_color32_make((RB_COLOR >> 16) & 0xFF, (RB_COLOR >> 8) & 0xFF, RB_COLOR & 0xFF, 255)
+                          : lv_color32_make(0, 0, 0, 255);
+    lv_canvas_set_palette(ui_navIconCanvas, 0, off);
+    lv_canvas_set_palette(ui_navIconCanvas, 2, off);
+    if (on)
+    {
+        lv_obj_add_flag(ui_navIcon, LV_OBJ_FLAG_HIDDEN);
+        lv_obj_align(ui_navIconCanvas, LV_ALIGN_TOP_LEFT, RB_CANVAS_X, RB_CANVAS_Y);
+    }
+    else
+    {
+        lv_obj_align(ui_navIconCanvas, LV_ALIGN_TOP_MID, NAV_CANVAS_X, NAV_CANVAS_Y);
+        // hideAll() above un-hid the ring with the rest of the normal layout, but it only
+        // belongs on screen together with a turn icon.
+        if (lv_obj_has_flag(ui_navIconCanvas, LV_OBJ_FLAG_HIDDEN))
+        {
+            lv_obj_add_flag(ui_navRing, LV_OBJ_FLAG_HIDDEN);
+            lv_obj_remove_flag(ui_navIcon, LV_OBJ_FLAG_HIDDEN);
+        }
+    }
+    lv_obj_invalidate(ui_navIconCanvas);
+#endif
+}
+
+/* xy = n (x,y) pairs, rider-relative watch pixels, y negative = ahead.
+   speedKmh 255 = unknown (hidden); limitKmh 0 = unknown (sign hidden). */
+void navRouteFrame(const int16_t *xy, int n, int speedKmh, int limitKmh)
+{
+#ifdef ENABLE_APP_NAVIGATION
+    if (!ui_navScreen || n < 2){
+        return;
+    }
+    if (n > ROUTE_MAX_POINTS) n = ROUTE_MAX_POINTS;
+    navRouteMode(true);
+    for (int i = 0; i < n; i++)
+    {
+        // Clamped only to keep LVGL's line maths in a sane range; the phone already
+        // trims the road to what can be on screen.
+        int32_t x = ROUTE_RIDER_X + xy[i * 2];
+        int32_t y = ROUTE_RIDER_Y + xy[i * 2 + 1];
+        routePts[i].x = LV_CLAMP(-1000, x, 1500);
+        routePts[i].y = LV_CLAMP(-1000, y, 1500);
+    }
+    lv_line_set_points(ui_navRouteLine, routePts, n);
+    navSpeedLimit(speedKmh, limitKmh);
+#endif
+}
+
+/* Street layer API, called from hal_loop (never from the BLE task). */
+void navStreetsClear(void)
+{
+#ifdef ENABLE_APP_NAVIGATION
+    stPolys = 0;
+    stPts = 0;
+    if (ui_navScreen && ui_navStreets)
+        lv_obj_invalidate(ui_navStreets);
+#endif
+}
+
+/* p = 0xC7 sub 0x01 payload: [anchorX m i32][anchorY m i32][count] then per street
+   [class][n][dx m i16][dy m i16]*n. Bounds-checked against len throughout. */
+void navStreetsAdd(const uint8_t *p, int len)
+{
+#ifdef ENABLE_APP_NAVIGATION
+    if (len < 9 || !streetsAlloc())
+        return;
+    int32_t ax = rd32(p), ay = rd32(p + 4);
+    int count = p[8];
+    int o = 9;
+    for (int k = 0; k < count; k++)
+    {
+        if (o + 2 > len)
+            break;
+        int cls = p[o], n = p[o + 1];
+        o += 2;
+        if (n < 2 || o + n * 4 > len)
+            break;
+        if (stPolys >= ST_MAX_POLYS || stPts + n > ST_MAX_PTS)
+            break;
+        int32_t minX = INT32_MAX, maxX = INT32_MIN, minY = INT32_MAX, maxY = INT32_MIN;
+        for (int i = 0; i < n; i++)
+        {
+            const uint8_t *q = &p[o + i * 4];
+            int32_t x = ax + (int16_t)((q[0] << 8) | q[1]);
+            int32_t y = ay + (int16_t)((q[2] << 8) | q[3]);
+            stX[stPts + i] = x;
+            stY[stPts + i] = y;
+            if (x < minX) minX = x;
+            if (x > maxX) maxX = x;
+            if (y < minY) minY = y;
+            if (y > maxY) maxY = y;
+        }
+        float hx = (maxX - minX) / 2.0f, hy = (maxY - minY) / 2.0f;
+        stStart[stPolys] = (uint16_t)stPts;
+        stLen[stPolys] = (uint8_t)n;
+        stCls[stPolys] = cls > 2 ? 2 : (uint8_t)cls;
+        stCx[stPolys] = (minX + maxX) / 2;
+        stCy[stPolys] = (minY + maxY) / 2;
+        stR[stPolys] = (int32_t)sqrtf(hx * hx + hy * hy) + 1;
+        stVis[stPolys] = 0;
+        stPts += n;
+        stPolys++;
+        o += n * 4;
+    }
+    // New streets show up at once, from the last pose.
+    streetsProject();
+    if (ui_navScreen && ui_navStreets)
+        lv_obj_invalidate(ui_navStreets);
+#endif
+}
+
+/* Rider pose from the route frame: position in decimetres in the street frame, heading in
+   0.01 deg clockwise from north, scale in px/m x100. valid = false: an older phone build
+   (no pose) - nothing can be placed, so nothing is drawn. */
+void navStreetsPose(bool valid, int32_t xDm, int32_t yDm, int hdgCentiDeg, int scale100)
+{
+#ifdef ENABLE_APP_NAVIGATION
+    stPoseValid = valid && scale100 > 0;
+    stPoseX = xDm;
+    stPoseY = yDm;
+    stPoseHdg = hdgCentiDeg;
+    stPoseScale = scale100;
+    streetsProject();
+    if (ui_navScreen && ui_navStreets && (stPolys > 0 || !stPoseValid))
+        lv_obj_invalidate(ui_navStreets);
+#endif
+}
+
+/* Current speed + posted limit + over-speed warning, in whichever layout is showing.
+   Fed by route frames (route mode) and by the phone's 0xC6 packet (Google Maps mode).
+   speedKmh 255 = unknown (hidden); limitKmh 0 = unknown (sign hidden). */
+void navSpeedLimit(int speedKmh, int limitKmh)
+{
+#ifdef ENABLE_APP_NAVIGATION
+    if (!ui_navScreen){
+        return;
+    }
+    if (speedKmh >= 0 && speedKmh < 255)
+    {
+        lv_label_set_text_fmt(ui_routeSpeed, "%d", speedKmh);
+        lv_obj_remove_flag(ui_routeSpeed, LV_OBJ_FLAG_HIDDEN);
+    }
+    else
+    {
+        lv_obj_add_flag(ui_routeSpeed, LV_OBJ_FLAG_HIDDEN);
+    }
+    if (limitKmh > 0)
+    {
+        lv_label_set_text_fmt(ui_routeLimitText, "%d", limitKmh);
+        // Three digits don't fit the sign at full size.
+        int sc = limitKmh >= 100 ? 205 : 256;
+        lv_obj_set_style_transform_scale_x(ui_routeLimitText, sc, LV_PART_MAIN | LV_STATE_DEFAULT);
+        lv_obj_set_style_transform_scale_y(ui_routeLimitText, sc, LV_PART_MAIN | LV_STATE_DEFAULT);
+        lv_obj_remove_flag(ui_routeLimit, LV_OBJ_FLAG_HIDDEN);
+    }
+    else
+    {
+        lv_obj_add_flag(ui_routeLimit, LV_OBJ_FLAG_HIDDEN);
+    }
+
+    // Only with BOTH a real speed and a real limit - never warn against a guess. During
+    // dead reckoning in a tunnel the phone sends speed as unknown, so the warning drops.
+    bool known = speedKmh >= 0 && speedKmh < 255 && limitKmh > 0;
+    bool over = overspeed;
+    if (!known) over = false;
+    else if (!over && speedKmh > limitKmh + OVERSPEED_ON_MARGIN) over = true;
+    else if (over && speedKmh <= limitKmh) over = false;
+    if (over != overspeed) setOverspeed(over);
 #endif
 }
 

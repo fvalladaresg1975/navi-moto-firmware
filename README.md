@@ -1,3 +1,23 @@
+# Navi Moto — firmware
+
+Firmware de **Navi Moto**: una pantalla redonda **Waveshare ESP32-S3 Touch AMOLED 1.75** (466×466) en el manillar como navegador para moto, al estilo Beeline / BaRing. Trabaja con la app Android **[navi-moto](https://github.com/fvalladaresg1975/navi-moto)**.
+
+Es un fork de [fbiego/esp32-c3-mini](https://github.com/fbiego/esp32-c3-mini) (MIT; los avisos de copyright originales se mantienen en las fuentes). Cambios principales sobre el original, para esta placa:
+
+- **Navegación de moto**: modo ruta (la app manda el camino por delante y la placa lo dibuja, con caja de giro, velocidad, límite y aviso rojo de exceso), calles de OpenStreetMap alrededor (enviadas una vez y giradas en la placa según la posición), zoom según la velocidad; navegación de Google Maps con velocidad y límite; salir de la navegación desde la placa.
+- **Protocolo propio** teléfono↔placa (0xC1–0xC7) decodificado en `dataCallback`, sin modificar la librería ChronosESP32.
+- Interfaz en español, splash y logo de Navi Moto, calendario grande, llamadas y contactos, PSRAM, RTC, PMU AXP2101.
+
+Compilar y grabar (PlatformIO): entorno `lolin_s3_1_75`.
+
+```bash
+pio run -e lolin_s3_1_75 -t upload
+```
+
+---
+
+*Lo que sigue es el README del proyecto original de fbiego.*
+
 # esp32-c3-mini
 A demo LVGL Watch project for ESP32 C3 mini 240*240 touch display development board. Can also be built natively to test the LVGL UI.
 

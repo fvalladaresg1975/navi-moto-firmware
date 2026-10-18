@@ -13,3 +13,6 @@ build.py
 
 # Local rollback snapshots (firmware binaries + notes), not source
 backups/
+
+# Lean-logger recordings pulled from the watch (personal ride data, not source)
+tools/lean_data/
