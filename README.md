@@ -1,141 +1,39 @@
 # Navi Moto — firmware
 
-Firmware de **Navi Moto**: una pantalla redonda **Waveshare ESP32-S3 Touch AMOLED 1.75** (466×466) en el manillar como navegador para moto, al estilo Beeline / BaRing. Trabaja con la app Android **[navi-moto](https://github.com/fvalladaresg1975/navi-moto)**.
+Firmware de **Navi Moto**: una pantalla redonda **Waveshare ESP32-S3 Touch AMOLED 1.75** (466×466) montada en el manillar como **navegador para moto**, al estilo Beeline / BaRing. Funciona junto a la app Android **[navi-moto](https://github.com/fvalladaresg1975/navi-moto)**, que calcula las rutas y le envía todo por Bluetooth LE.
 
-Es un fork de [fbiego/esp32-c3-mini](https://github.com/fbiego/esp32-c3-mini) (MIT; los avisos de copyright originales se mantienen en las fuentes). Cambios principales sobre el original, para esta placa:
+## Funciones
 
-- **Navegación de moto**: modo ruta (la app manda el camino por delante y la placa lo dibuja, con caja de giro, velocidad, límite y aviso rojo de exceso), calles de OpenStreetMap alrededor (enviadas una vez y giradas en la placa según la posición), zoom según la velocidad; navegación de Google Maps con velocidad y límite; salir de la navegación desde la placa.
-- **Protocolo propio** teléfono↔placa (0xC1–0xC7) decodificado en `dataCallback`, sin modificar la librería ChronosESP32.
-- Interfaz en español, splash y logo de Navi Moto, calendario grande, llamadas y contactos, PSRAM, RTC, PMU AXP2101.
+- **Modo ruta** — el camino por delante dibujado sobre la pantalla, caja con la flecha y distancia del próximo giro, velocidad, límite de la vía y aviso rojo al excederlo, distancia restante y anillo de avance hacia el giro.
+- **Calles alrededor** — calles de OpenStreetMap tenues bajo la ruta: la app las envía una sola vez y la placa las gira y desplaza según la posición del conductor.
+- **Zoom según la velocidad** — cerca en ciudad, lejos en carretera (lo decide la app).
+- **Navegación de Google Maps** — indicaciones y flecha de Maps, con velocidad y límite.
+- **Salir de la navegación desde la placa**, panel de música y volumen durante la navegación, vuelta automática a la navegación.
+- **Notificaciones, llamadas** (contestar / rechazar) y **contactos** (llamar desde la placa).
+- **Clima**, calendario, cronómetro, estadísticas del último viaje.
+- Interfaz en español, pantalla de inicio con la moto, reloj RTC y batería (PMU AXP2101).
 
-Compilar y grabar (PlatformIO): entorno `lolin_s3_1_75`.
+## Compilar y grabar
+
+Con [PlatformIO](https://platformio.org/), entorno `lolin_s3_1_75`:
 
 ```bash
 pio run -e lolin_s3_1_75 -t upload
 ```
 
----
+## Protocolo con la app
 
-*Lo que sigue es el README del proyecto original de fbiego.*
+Sobre el protocolo BLE de la librería [ChronosESP32](https://github.com/fbiego/chronos-esp32), con comandos propios decodificados en `dataCallback` (`hal/esp32/app_hal.cpp`), sin modificar la librería:
 
-# esp32-c3-mini
-A demo LVGL Watch project for ESP32 C3 mini 240*240 touch display development board. Can also be built natively to test the LVGL UI.
+| Comando | Sentido | Contenido |
+|---|---|---|
+| `0xC1` / `0xC2` | placa → app | contestar o rechazar llamada / llamar a un contacto |
+| `0xC3` | app → placa | estado de la música |
+| `0xC4` | placa → app | salir de la navegación |
+| `0xC5` | app → placa | cuadro del modo ruta: camino en píxeles, velocidad, límite y posición del conductor |
+| `0xC6` | app → placa | velocidad y límite en modo Google Maps |
+| `0xC7` | app → placa | calles alrededor (agregar / borrar) |
 
-## Videos
-- [`C3 UI on 466×466 AMOLED`](https://youtu.be/l3tHc5EIgos)
-- [`LVGL 9 update, Navigation`](https://youtu.be/qGODX6ALO_U)
-- [`ESP32 C3 mini LVGL`](https://youtu.be/u96OkjxC0Ro)
-- [`ESP32  Watchfaces LVGL`](https://youtu.be/lvRsTp9v6_k)
-- [`Waveshare ESP32 S3 (240x240 1.28” Round & 240x280 1.69” Rectangular)`](https://youtu.be/WXER_NX7LWI)
-- [`Installing custom watchfaces`](https://youtu.be/qXx6tj7s6pQ)
+## Créditos y licencia
 
-
-
-https://github.com/user-attachments/assets/3cdc30e3-8383-4227-b88c-32bd1d464c70
-
-
-
-## Screens Preview
-
-![Preview](preview.png?raw=true "preview")
-
-![Preview2](preview_2.png?raw=true "preview2")
-
-## Screens
- - Time (Time, Date, Day, Weather[Icon, Temp]) + Custom Watchfaces
- - ~~Installable custom watchfaces from Chronos app~~ ToDo - LVGL 9
- - Weather (City,Icon, Temp, Update time) (1 week forecast [Day, Icon, Temp]) (Hourly forecast [+wind, ])
- - Notifications (Icon, Time, Text) (List [Icon, Text] - 10 notifications) (Incoming call)
- - Settings (Brightness, Timeout, Battery, About)
- - Control (Music Control, Find Phone, Bluetooth State) (Camera Capture)
- - QR Codes, Contacts
- - Games - Simon Says, Racing (Need to enable)
- - Navigation (Get Google Maps Navigation instructions on ESP32)
- - Create custom apps with LVGL [sample](src/apps/sample/)
-
- ## Building
-
- Select your build environment in platformio.ini by uncommenting only one `default_envs`
-
- When building for native check that you have configured SDL according to your platform. Follow the instructions here
- https://github.com/lvgl/lv_platformio?tab=readme-ov-file#install-sdl-drivers
-
- The SDL path might be different depending on your configuration and you will need to update [`platformio.ini`](platformio.ini) accordingly
-
- ### Prebuilt Native 
-
- The prebuilt native applications have been included in the [`test folder`](test/), however you might still require SDL installed before running them.
- 
- You can also find binary files for various boards.
-
- ### Web Flasher (ESP32)
-
- You can also flash ESP32 boards using the web tool available at https://chronos.ke/c3-ui#install
-
-## Supported Boards
-
-![Boards 2](boards_2.png?raw=true "boards2")
-![Boards](boards.png?raw=true "boards")
-
-- [Viewe SmartRing AMOLED 1.8 466x466](https://viewedisplay.com/product/esp32-1-8-inch-round-amoled-touch-display-arduino-lvgl-wifi-voice-assistant-ai-smart-displays/)
-- [Viewe Touch Knob AMOLED 1.5 466x466](https://viewedisplay.com/product/esp32-1-5-inch-466x466-round-amoled-knob-display-touch-screen-arduino-lvgl/)
-- [Viewe S3 AMOLED 1.5 466x466](https://viewedisplay.com/product/esp32-s3-1-5-inch-amoled-touch-screen-dev-board-uart-smart-display/)
-- [Viewe Echo Ear 1.85 360x360](https://viewedisplay.com/product/echoear-plus-esp32-s3-ai-development-kit-with-openai-gemini-xiaozhi-ai/)
-- [CrowPanel ESP32 Display-1.28(R) 240x240](https://www.elecrow.com/crowpanel-esp32-display-1-28-r-inch-240-240-round-ips-display-capacitive-touch-spi-screen.html)
-- [M5 Stack Dial 240x240](https://docs.m5stack.com/en/core/M5Dial)
-- [ESP32 C3 Mini 1.28 240x240](https://www.aliexpress.com/item/1005006451631422.html)
-- [Waveshare S3 1.28 240x240](https://www.waveshare.com/product/esp32-s3-touch-lcd-1.28.htm)
-- [Waveshare S3 1.69 240x280](https://www.waveshare.com/esp32-s3-touch-lcd-1.69.htm)
-- [Waveshare RP2040 1.28 240x240](https://www.waveshare.com/rp2040-touch-lcd-1.28.htm)
-- [Waveshare RP2040 1.69 240x280](https://www.waveshare.com/product/rp2040-touch-lcd-1.69.htm)
-- [Waveshare S3 1.75 466x466](https://www.waveshare.com/product/esp32-s3-touch-amoled-1.75.htm)
-- [Waveshare S3 2.06 410x502](https://www.waveshare.com/product/esp32-s3-touch-amoled-2.06.htm)
-
- ## Watchfaces
-
-This project supports two types of watchfaces in addition to the default one:
-
-#### 1. External Precompiled Binary Watchfaces
-
-[Watchfaces List](src/faces/README.md)
-
-These watchfaces are binary files converted into LVGL code and compiled along with the main code. To add or remove these watchfaces, you need to recompile and flash the firmware.
-
-- Check out the [`esp32-lvgl-watchface`](https://github.com/fbiego/esp32-lvgl-watchface) project for details on converting watchfaces from binary to LVGL code.
-- You can add more watchfaces, but be mindful of the ESP32's flash size limitations. Prioritize compiling only your favorite watchfaces.
-- Links to pre-built binary watchfaces are included. Enable them in `app_hal.h` according to your build platform.
-
-#### 2. External Installable Binary Watchfaces
-
-- [x] Custom watchfaces works on LVGL 8. [Checkout this branch](https://github.com/fbiego/esp32-c3-mini/tree/lvgl_8)
-- [ ] Work in progress for LVGL 9
-
-- Ensure there is sufficient storage space on the ESP32 flash. Using the FFAT partition is recommended.
-
-> [!IMPORTANT]
-> This feature is experimental and may not work 100% reliably.
-> Ensure your partition is mounted successfully for proper functionality.
-
-> [!WARNING]  
-> This has issues running on ESP32 C3 Mini due to smaller SRAM size
-> Not ported to LVGL 9 yet. Work in progess
-
-## Chronos App
-This is needed for additional functions on esp32 hardware as listed below.
-
-[<img src="chronos.png?raw=true" width=100 align=left>](https://chronos.ke/app?id=c3-mini)
-<br><br><br><br>
-
-[ChronosESP32 Website](https://chronos.ke/esp32)
-
-
-### App functions (ESP32)
-[ChronosESP32](https://github.com/fbiego/chronos-esp32) library handles communication with the Chronos app over BLE
-- Sync time
-- ~~Install additional watchfaces~~ LVGL 9 Work in progress
-- Send notifications and call alerts
-- Sync weather info
-- Sync QR Links, & Contacts
-- Music control, find phone & Camera
-- Send Navigation instructions
-
+Basado en [esp32-c3-mini](https://github.com/fbiego/esp32-c3-mini) de Felix Biego. Licencia MIT — ver [LICENSE](LICENSE). Datos de mapas © colaboradores de OpenStreetMap (ODbL).
