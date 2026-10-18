@@ -2636,19 +2636,97 @@ int putchar(int ch)
    the whole image STEP px further right; its first SPLASH_MOTO_MARGIN columns are black,
    so the push itself erases the previous frame's trailing edge - no per-frame clear.
    Crosses through the vertical centre, where the round panel is fully visible. ~1.2 s,
-   a bit under the 2 s the static logo used to hold. */
-void loadSplash()
+   a bit under the 2 s the static logo used to hold.
+
+   Follows the screen rotation setting (rotation = 0-3, as in prefs "rotate"): the splash
+   runs before LVGL, so LVGL's software rotation doesn't apply to it - with the board
+   mounted at 180 it crossed upside down. The image is rotated once into a PSRAM copy and
+   both its position and its direction of travel are mapped with the same formulas as
+   lv_display_rotate_area(), so it reads upright, left to right, like the rest of the UI.
+   The black margin rotates with the image and stays on the trailing side. */
+void loadSplash(int rotation)
 {
   const int STEP = 14; // must stay <= SPLASH_MOTO_MARGIN
-  const int y = (SCREEN_HEIGHT - SPLASH_MOTO_H) / 2;
+  const int W = SPLASH_MOTO_W, H = SPLASH_MOTO_H, N = SCREEN_WIDTH; // square panel
+  const int y = (SCREEN_HEIGHT - H) / 2;
+  int r = (rotation >= 1 && rotation <= 3 && SCREEN_WIDTH == SCREEN_HEIGHT) ? rotation : 0;
+
+  const uint16_t *img = (const uint16_t *)splash_moto;
+  uint8_t *rot = NULL;
+  int rw = W, rh = H;
+  if (r != 0)
+  {
+    rot = (uint8_t *)heap_caps_malloc(W * H * 2, MALLOC_CAP_SPIRAM);
+    if (rot == NULL)
+    {
+      r = 0; // no memory: an unrotated splash beats none
+    }
+    else
+    {
+      if (r != 2)
+      {
+        rw = H;
+        rh = W;
+      }
+      for (int j = 0; j < H; j++)
+      {
+        for (int i = 0; i < W; i++)
+        {
+          int pi, pj; // where logical pixel (i, j) lands in the rotated image
+          if (r == 1)
+          {
+            pi = j;
+            pj = W - 1 - i;
+          }
+          else if (r == 2)
+          {
+            pi = W - 1 - i;
+            pj = H - 1 - j;
+          }
+          else
+          {
+            pi = H - 1 - j;
+            pj = i;
+          }
+          // byte copy: the source sits in flash and may not be 2-byte aligned
+          const uint8_t *s = &splash_moto[(j * W + i) * 2];
+          uint8_t *d = &rot[(pj * rw + pi) * 2];
+          d[0] = s[0];
+          d[1] = s[1];
+        }
+      }
+      img = (const uint16_t *)rot;
+    }
+  }
+
   tft.fillScreen(TFT_BLACK);
   screenBrightness(200);
-  for (int x = -SPLASH_MOTO_W; x < SCREEN_WIDTH; x += STEP)
+  for (int x = -W; x < N; x += STEP)
   {
-    tft.pushImage(x, y, SPLASH_MOTO_W, SPLASH_MOTO_H, (uint16_t *)splash_moto);
+    int px = x, py = y; // physical top-left of the logical image at (x, y)
+    if (r == 1)
+    {
+      px = y;
+      py = N - x - W;
+    }
+    else if (r == 2)
+    {
+      px = N - x - W;
+      py = N - y - H;
+    }
+    else if (r == 3)
+    {
+      px = N - y - H;
+      py = x;
+    }
+    tft.pushImage(px, py, rw, rh, (uint16_t *)img);
     delay(16);
   }
   tft.fillScreen(TFT_BLACK);
+  if (rot)
+  {
+    heap_caps_free(rot);
+  }
 }
 
 static uint32_t my_tick(void)
@@ -2768,7 +2846,7 @@ void hal_setup()
   }
 #endif
 
-  loadSplash();
+  loadSplash(rt);
 
 
   alert_states = prefs.getInt("alert_states", alert_states);
