@@ -140,6 +140,8 @@ extern "C"
     void ui_event_musicNextButton(lv_event_t *e);
     extern lv_obj_t *ui_musicNextButton;
     extern lv_obj_t *ui_btStateButton;
+    /* Battery readout on the control panel: pct < 0 = unknown. */
+    void ui_controlBattery(int boardPct, bool boardCharging, int phonePct, bool phoneCharging);
     extern lv_obj_t *ui_searchPanel;
     void ui_event_phoneSearchButton(lv_event_t *e);
     extern lv_obj_t *ui_phoneSearchButton;

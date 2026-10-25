@@ -10,6 +10,8 @@ Firmware de **Navi Moto**: una pantalla redonda **Waveshare ESP32-S3 Touch AMOLE
 - **Navegación de Google Maps** — indicaciones y flecha de Maps, con velocidad y límite.
 - **Salir de la navegación desde la placa**, panel de música y volumen durante la navegación, vuelta automática a la navegación.
 - **Notificaciones, llamadas** (contestar / rechazar) y **contactos** (llamar desde la placa).
+- **Esferas propias para moto** (dibujadas con LVGL, sin imágenes): *Pixel Moto* (clima, viento, baterías, último viaje), *Tablero* (la hora como tacómetro, batería como medidor de bencina, testigo BT), *Clima de ruta* (próximas 5 horas con probabilidad de lluvia, viento, atardecer) y *Copiloto* (hora gigante, alto contraste).
+- **Batería de la placa y del teléfono** en el panel de control (deslizar hacia abajo).
 - **Clima**, calendario, cronómetro, estadísticas del último viaje.
 - Interfaz en español, pantalla de inicio con la moto, reloj RTC y batería (PMU AXP2101).
 
@@ -34,7 +36,10 @@ Sobre el protocolo BLE de la librería [ChronosESP32](https://github.com/fbiego/
 | `0xC6` | app → placa | velocidad y límite en modo Google Maps |
 | `0xC7` | app → placa | calles alrededor (agregar / borrar) |
 | `0xC8` | ambos | brillo de la pantalla: la app lo fija o lo pide; la placa avisa el nivel actual |
+| `0xC9` | app → placa | clima extra para las esferas: probabilidad de lluvia por hora, salida y puesta del sol |
+
+La batería del teléfono usa el comando propio de la librería (`0x91`).
 
 ## Créditos y licencia
 
-Basado en [esp32-c3-mini](https://github.com/fbiego/esp32-c3-mini) de Felix Biego. Licencia MIT — ver [LICENSE](LICENSE). Datos de mapas © colaboradores de OpenStreetMap (ODbL).
+Basado en [esp32-c3-mini](https://github.com/fbiego/esp32-c3-mini) de Felix Biego. Licencia MIT — ver [LICENSE](LICENSE). Datos de mapas © colaboradores de OpenStreetMap (ODbL). Tipografía de las esferas: Montserrat (SIL Open Font License).

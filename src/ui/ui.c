@@ -158,6 +158,11 @@ lv_obj_t *ui_musicPrevButton;
 void ui_event_musicNextButton(lv_event_t *e);
 lv_obj_t *ui_musicNextButton;
 lv_obj_t *ui_btStateButton;
+// Control panel battery readout (see ui_controlBattery)
+static lv_obj_t *ui_ctlBattBoardArc;
+static lv_obj_t *ui_ctlBattPhoneArc;
+static lv_obj_t *ui_ctlBattBoardLabel;
+static lv_obj_t *ui_ctlBattPhoneLabel;
 lv_obj_t *ui_searchPanel;
 void ui_event_phoneSearchButton(lv_event_t *e);
 lv_obj_t *ui_phoneSearchButton;
@@ -3548,6 +3553,42 @@ void ui_controlScreen_screen_init(void)
       lv_obj_set_style_bg_color(ui_controlScreen, lv_color_hex(0x000000), LV_PART_MAIN | LV_STATE_DEFAULT);
       lv_obj_set_style_bg_opa(ui_controlScreen, 255, LV_PART_MAIN | LV_STATE_DEFAULT);
 
+      /* Battery, one swipe down from the watch face (user: a sliding screen, not a
+         settings submenu): two arcs along the round edge - left = this board, right = the
+         phone - filling bottom-up with the charge, plus both percentages at the top.
+         Created first so they draw behind every control. Filled by ui_controlBattery(). */
+      for (int side = 0; side < 2; side++)
+      {
+            lv_obj_t *arc = lv_arc_create(ui_controlScreen);
+            lv_obj_set_size(arc, UI_SCALE_PX(240), UI_SCALE_PX(240));
+            lv_obj_center(arc);
+            lv_arc_set_rotation(arc, 0);
+            if (side == 0)
+            {
+                  lv_arc_set_bg_angles(arc, 100, 260); // left half, bottom to top
+                  lv_arc_set_mode(arc, LV_ARC_MODE_NORMAL);
+            }
+            else
+            {
+                  lv_arc_set_bg_angles(arc, 280, 80); // right half, top to bottom...
+                  lv_arc_set_mode(arc, LV_ARC_MODE_REVERSE); // ...filled from the bottom
+            }
+            lv_arc_set_range(arc, 0, 100);
+            lv_arc_set_value(arc, 0);
+            lv_obj_remove_style(arc, NULL, LV_PART_KNOB);
+            lv_obj_remove_flag(arc, LV_OBJ_FLAG_CLICKABLE);
+            lv_obj_set_style_pad_all(arc, UI_SCALE_PX(3), LV_PART_MAIN | LV_STATE_DEFAULT);
+            lv_obj_set_style_bg_opa(arc, 0, LV_PART_MAIN | LV_STATE_DEFAULT);
+            lv_obj_set_style_arc_width(arc, UI_SCALE_PX(5), LV_PART_MAIN | LV_STATE_DEFAULT);
+            lv_obj_set_style_arc_color(arc, lv_color_hex(0x2C2C2A), LV_PART_MAIN | LV_STATE_DEFAULT);
+            lv_obj_set_style_arc_width(arc, UI_SCALE_PX(5), LV_PART_INDICATOR | LV_STATE_DEFAULT);
+            lv_obj_set_style_arc_rounded(arc, true, LV_PART_INDICATOR | LV_STATE_DEFAULT);
+            if (side == 0)
+                  ui_ctlBattBoardArc = arc;
+            else
+                  ui_ctlBattPhoneArc = arc;
+      }
+
       // The icons below were laid out for a 240x240 screen using offsets from center.
       // UI_SCALE_PX grows their real coordinates/sizes to fill larger displays (see
       // pins.h - a render-only transform_scale was tried here first but it doesn't
@@ -3605,8 +3646,10 @@ void ui_controlScreen_screen_init(void)
       lv_image_set_src(ui_btStateButton, &ui_img_bluetooth_g_png);
       lv_obj_set_width(ui_btStateButton, LV_SIZE_CONTENT);  /// 1
       lv_obj_set_height(ui_btStateButton, LV_SIZE_CONTENT); /// 1
-      lv_obj_set_x(ui_btStateButton, 0);
-      lv_obj_set_y(ui_btStateButton, -UI_SCALE_PX(100));
+      // Moved from the top centre (0, -100) to the retired QR button's spot: the top is
+      // the battery readout now.
+      lv_obj_set_x(ui_btStateButton, -UI_SCALE_PX(40));
+      lv_obj_set_y(ui_btStateButton, -UI_SCALE_PX(60));
       lv_obj_set_align(ui_btStateButton, LV_ALIGN_CENTER);
       lv_obj_add_state(ui_btStateButton, LV_STATE_CHECKED);         /// States
       lv_obj_add_flag(ui_btStateButton, LV_OBJ_FLAG_CHECKABLE);     /// Flags
@@ -3712,6 +3755,78 @@ void ui_controlScreen_screen_init(void)
       lv_obj_add_flag(ui_qrCodeButton, LV_OBJ_FLAG_HIDDEN); // QR screen retired, see the app list
       lv_obj_add_event_cb(ui_closeControlButton, ui_event_closeControlButton, LV_EVENT_ALL, NULL);
       lv_obj_add_event_cb(ui_controlScreen, ui_event_controlScreen, LV_EVENT_ALL, NULL);
+
+      // Battery percentages at the top: board (battery symbol) left, phone (handset) right.
+      // Built-in Montserrat 24: it has the LVGL symbols and the digits.
+      // Each is anchored by its OUTER edge, so the extra charging symbol grows it towards
+      // the centre: centred, "<charge><battery> 26%" reached into the round edge, which is
+      // narrow up here, and got clipped (seen on the first test).
+      for (int side = 0; side < 2; side++)
+      {
+            lv_obj_t *l = lv_label_create(ui_controlPanel);
+            if (side == 0)
+                  lv_obj_align(l, LV_ALIGN_LEFT_MID, UI_SCALE_PX(70), -UI_SCALE_PX(100));
+            else
+                  lv_obj_align(l, LV_ALIGN_RIGHT_MID, -UI_SCALE_PX(70), -UI_SCALE_PX(100));
+            lv_obj_set_style_text_font(l, &lv_font_montserrat_24, LV_PART_MAIN | LV_STATE_DEFAULT);
+            lv_obj_set_style_text_color(l, lv_color_hex(0xFFFFFF), LV_PART_MAIN | LV_STATE_DEFAULT);
+            lv_label_set_text(l, side == 0 ? LV_SYMBOL_BATTERY_EMPTY " --" : LV_SYMBOL_CALL " --");
+            if (side == 0)
+                  ui_ctlBattBoardLabel = l;
+            else
+                  ui_ctlBattPhoneLabel = l;
+      }
+}
+
+/* Colour for a battery level: blue while charging, otherwise green / amber / red. */
+static lv_color_t battColor(int pct, bool charging)
+{
+      if (charging)
+            return lv_color_hex(0x3DA5FF);
+      if (pct < 20)
+            return lv_color_hex(0xE0262B);
+      if (pct < 50)
+            return lv_color_hex(0xEF9F27);
+      return lv_color_hex(0x2ECC71);
+}
+
+static const char *battSymbol(int pct)
+{
+      if (pct >= 90)
+            return LV_SYMBOL_BATTERY_FULL;
+      if (pct >= 65)
+            return LV_SYMBOL_BATTERY_3;
+      if (pct >= 40)
+            return LV_SYMBOL_BATTERY_2;
+      if (pct >= 15)
+            return LV_SYMBOL_BATTERY_1;
+      return LV_SYMBOL_BATTERY_EMPTY;
+}
+
+/* Control panel battery readout. pct < 0 = unknown (e.g. the phone hasn't reported yet,
+   or it's disconnected): shown as "--" with an empty arc. */
+void ui_controlBattery(int boardPct, bool boardCharging, int phonePct, bool phoneCharging)
+{
+      if (!ui_ctlBattBoardLabel)
+            return;
+      int pct[2] = {boardPct, phonePct};
+      bool chg[2] = {boardCharging, phoneCharging};
+      lv_obj_t *labels[2] = {ui_ctlBattBoardLabel, ui_ctlBattPhoneLabel};
+      lv_obj_t *arcs[2] = {ui_ctlBattBoardArc, ui_ctlBattPhoneArc};
+      for (int i = 0; i < 2; i++)
+      {
+            const char *icon = i == 0 ? battSymbol(pct[i]) : LV_SYMBOL_CALL;
+            if (pct[i] < 0)
+            {
+                  lv_label_set_text_fmt(labels[i], "%s --", icon);
+                  lv_arc_set_value(arcs[i], 0);
+                  continue;
+            }
+            int p = pct[i] > 100 ? 100 : pct[i];
+            lv_label_set_text_fmt(labels[i], chg[i] ? LV_SYMBOL_CHARGE "%s %d%%" : "%s %d%%", icon, p);
+            lv_arc_set_value(arcs[i], p);
+            lv_obj_set_style_arc_color(arcs[i], battColor(p, chg[i]), LV_PART_INDICATOR | LV_STATE_DEFAULT);
+      }
 }
 
 void ui_appInfoScreen_screen_init(void)
@@ -4140,107 +4255,22 @@ void ui_watchfaces_init(void)
       numFaces = 0;
       registerWatchface_cb("Default", &digital_preview, &ui_clockScreen, NULL); // register the default watchface
 
-      // register other watchfaces by initializing them and passing the register callback
-      init_face_elecrow(registerWatchface_cb);
-      init_face_34_2(registerWatchface_cb);
-      init_face_75_2(registerWatchface_cb);
-      init_face_79_2(registerWatchface_cb);
-      init_face_116_2(registerWatchface_cb);
-      init_face_756_2(registerWatchface_cb);
-      init_face_b_w_resized(registerWatchface_cb);
-      init_face_kenya(registerWatchface_cb);
-      init_face_pixel_resized(registerWatchface_cb);
-      init_face_radar(registerWatchface_cb);
-      init_face_smart_resized(registerWatchface_cb);
-      init_face_tix_resized(registerWatchface_cb);
-      init_face_wfb_resized(registerWatchface_cb);
-
-      init_face_174(registerWatchface_cb);
-      init_face_228(registerWatchface_cb);
-      init_face_1041(registerWatchface_cb);
-      init_face_1167(registerWatchface_cb);
-      init_face_1169(registerWatchface_cb);
-      init_face_2051(registerWatchface_cb);
-      init_face_2151(registerWatchface_cb);
-      init_face_3589(registerWatchface_cb);
-
-      init_face_arctic_360(registerWatchface_cb);
-      init_face_digital_360(registerWatchface_cb);
-      init_face_glow_360(registerWatchface_cb);
-      init_face_green_flame_360(registerWatchface_cb);
-      init_face_gta_vi_360(registerWatchface_cb);
-      init_face_neon_360(registerWatchface_cb);
-      init_face_night_360(registerWatchface_cb);
-      init_face_simple_360(registerWatchface_cb);
-      init_face_terminal_360(registerWatchface_cb);
-
-      init_face_756_2_466(registerWatchface_cb);
-      init_face_radar_466(registerWatchface_cb);
-      init_face_75_2_466(registerWatchface_cb);
-      init_face_34_2_466(registerWatchface_cb);
-      init_face_79_2_466(registerWatchface_cb);
-      init_face_pixel_resized_466(registerWatchface_cb);
-      init_face_smart_resized_466(registerWatchface_cb);
-
-      init_face_174_410(registerWatchface_cb);
-      init_face_228_410(registerWatchface_cb);
-      init_face_1167_410(registerWatchface_cb);
-      init_face_2051_410(registerWatchface_cb);
-      init_face_2151_410(registerWatchface_cb);
-      init_face_citizen_410(registerWatchface_cb);
+      // Navi Moto's own faces (src/faces/nm_*, see src/common/navi_face.h). They replaced
+      // every upstream bitmap face: those were conversions of a third-party catalogue,
+      // took most of the firmware's flash, and were watch faces, not riding ones.
+      init_face_nm_pixel(registerWatchface_cb);
+      init_face_nm_tablero(registerWatchface_cb);
+      init_face_nm_clima(registerWatchface_cb);
+      init_face_nm_copiloto(registerWatchface_cb);
 }
 
 void ui_update_watchfaces(int second, int minute, int hour, bool mode, bool am, int day, int month, int year, int weekday,
                           int temp, int icon, int battery, bool connection, int steps, int distance, int kcal, int bpm, int oxygen)
 {
-
-      update_check_elecrow(ui_home, second, minute, hour, mode, am, day, month, year, weekday, temp, icon, battery, connection, steps, distance, kcal, bpm, oxygen);
-      update_check_34_2(ui_home, second, minute, hour, mode, am, day, month, year, weekday, temp, icon, battery, connection, steps, distance, kcal, bpm, oxygen);
-      update_check_75_2(ui_home, second, minute, hour, mode, am, day, month, year, weekday, temp, icon, battery, connection, steps, distance, kcal, bpm, oxygen);
-      update_check_79_2(ui_home, second, minute, hour, mode, am, day, month, year, weekday, temp, icon, battery, connection, steps, distance, kcal, bpm, oxygen);
-      update_check_116_2(ui_home, second, minute, hour, mode, am, day, month, year, weekday, temp, icon, battery, connection, steps, distance, kcal, bpm, oxygen);
-      update_check_756_2(ui_home, second, minute, hour, mode, am, day, month, year, weekday, temp, icon, battery, connection, steps, distance, kcal, bpm, oxygen);
-      update_check_b_w_resized(ui_home, second, minute, hour, mode, am, day, month, year, weekday, temp, icon, battery, connection, steps, distance, kcal, bpm, oxygen);
-      update_check_kenya(ui_home, second, minute, hour, mode, am, day, month, year, weekday, temp, icon, battery, connection, steps, distance, kcal, bpm, oxygen);
-      update_check_pixel_resized(ui_home, second, minute, hour, mode, am, day, month, year, weekday, temp, icon, battery, connection, steps, distance, kcal, bpm, oxygen);
-      update_check_radar(ui_home, second, minute, hour, mode, am, day, month, year, weekday, temp, icon, battery, connection, steps, distance, kcal, bpm, oxygen);
-      update_check_smart_resized(ui_home, second, minute, hour, mode, am, day, month, year, weekday, temp, icon, battery, connection, steps, distance, kcal, bpm, oxygen);
-      update_check_tix_resized(ui_home, second, minute, hour, mode, am, day, month, year, weekday, temp, icon, battery, connection, steps, distance, kcal, bpm, oxygen);
-      update_check_wfb_resized(ui_home, second, minute, hour, mode, am, day, month, year, weekday, temp, icon, battery, connection, steps, distance, kcal, bpm, oxygen);
-
-      update_check_174(ui_home, second, minute, hour, mode, am, day, month, year, weekday, temp, icon, battery, connection, steps, distance, kcal, bpm, oxygen);
-      update_check_228(ui_home, second, minute, hour, mode, am, day, month, year, weekday, temp, icon, battery, connection, steps, distance, kcal, bpm, oxygen);
-      update_check_1041(ui_home, second, minute, hour, mode, am, day, month, year, weekday, temp, icon, battery, connection, steps, distance, kcal, bpm, oxygen);
-      update_check_1167(ui_home, second, minute, hour, mode, am, day, month, year, weekday, temp, icon, battery, connection, steps, distance, kcal, bpm, oxygen);
-      update_check_1169(ui_home, second, minute, hour, mode, am, day, month, year, weekday, temp, icon, battery, connection, steps, distance, kcal, bpm, oxygen);
-      update_check_2051(ui_home, second, minute, hour, mode, am, day, month, year, weekday, temp, icon, battery, connection, steps, distance, kcal, bpm, oxygen);
-      update_check_2151(ui_home, second, minute, hour, mode, am, day, month, year, weekday, temp, icon, battery, connection, steps, distance, kcal, bpm, oxygen);
-      update_check_3589(ui_home, second, minute, hour, mode, am, day, month, year, weekday, temp, icon, battery, connection, steps, distance, kcal, bpm, oxygen);
-
-      update_check_arctic_360(ui_home, second, minute, hour, mode, am, day, month, year, weekday, temp, icon, battery, connection, steps, distance, kcal, bpm, oxygen);
-      update_check_digital_360(ui_home, second, minute, hour, mode, am, day, month, year, weekday, temp, icon, battery, connection, steps, distance, kcal, bpm, oxygen);
-      update_check_glow_360(ui_home, second, minute, hour, mode, am, day, month, year, weekday, temp, icon, battery, connection, steps, distance, kcal, bpm, oxygen);
-      update_check_green_flame_360(ui_home, second, minute, hour, mode, am, day, month, year, weekday, temp, icon, battery, connection, steps, distance, kcal, bpm, oxygen);
-      update_check_gta_vi_360(ui_home, second, minute, hour, mode, am, day, month, year, weekday, temp, icon, battery, connection, steps, distance, kcal, bpm, oxygen);
-      update_check_neon_360(ui_home, second, minute, hour, mode, am, day, month, year, weekday, temp, icon, battery, connection, steps, distance, kcal, bpm, oxygen);
-      update_check_night_360(ui_home, second, minute, hour, mode, am, day, month, year, weekday, temp, icon, battery, connection, steps, distance, kcal, bpm, oxygen);
-      update_check_simple_360(ui_home, second, minute, hour, mode, am, day, month, year, weekday, temp, icon, battery, connection, steps, distance, kcal, bpm, oxygen);
-      update_check_terminal_360(ui_home, second, minute, hour, mode, am, day, month, year, weekday, temp, icon, battery, connection, steps, distance, kcal, bpm, oxygen);
-
-      update_check_756_2_466(ui_home, second, minute, hour, mode, am, day, month, year, weekday, temp, icon, battery, connection, steps, distance, kcal, bpm, oxygen);
-      update_check_radar_466(ui_home, second, minute, hour, mode, am, day, month, year, weekday, temp, icon, battery, connection, steps, distance, kcal, bpm, oxygen);
-      update_check_75_2_466(ui_home, second, minute, hour, mode, am, day, month, year, weekday, temp, icon, battery, connection, steps, distance, kcal, bpm, oxygen);
-      update_check_34_2_466(ui_home, second, minute, hour, mode, am, day, month, year, weekday, temp, icon, battery, connection, steps, distance, kcal, bpm, oxygen);
-      update_check_79_2_466(ui_home, second, minute, hour, mode, am, day, month, year, weekday, temp, icon, battery, connection, steps, distance, kcal, bpm, oxygen);
-      update_check_pixel_resized_466(ui_home, second, minute, hour, mode, am, day, month, year, weekday, temp, icon, battery, connection, steps, distance, kcal, bpm, oxygen);
-      update_check_smart_resized_466(ui_home, second, minute, hour, mode, am, day, month, year, weekday, temp, icon, battery, connection, steps, distance, kcal, bpm, oxygen);
-      
-      update_check_174_410(ui_home, second, minute, hour, mode, am, day, month, year, weekday, temp, icon, battery, connection, steps, distance, kcal, bpm, oxygen);
-      update_check_228_410(ui_home, second, minute, hour, mode, am, day, month, year, weekday, temp, icon, battery, connection, steps, distance, kcal, bpm, oxygen);
-      update_check_1167_410(ui_home, second, minute, hour, mode, am, day, month, year, weekday, temp, icon, battery, connection, steps, distance, kcal, bpm, oxygen);
-      update_check_2051_410(ui_home, second, minute, hour, mode, am, day, month, year, weekday, temp, icon, battery, connection, steps, distance, kcal, bpm, oxygen);
-      update_check_2151_410(ui_home, second, minute, hour, mode, am, day, month, year, weekday, temp, icon, battery, connection, steps, distance, kcal, bpm, oxygen);
-      update_check_citizen_410(ui_home, second, minute, hour, mode, am, day, month, year, weekday, temp, icon, battery, connection, steps, distance, kcal, bpm, oxygen);
+      update_check_nm_pixel(ui_home, second, minute, hour, mode, am, day, month, year, weekday, temp, icon, battery, connection, steps, distance, kcal, bpm, oxygen);
+      update_check_nm_tablero(ui_home, second, minute, hour, mode, am, day, month, year, weekday, temp, icon, battery, connection, steps, distance, kcal, bpm, oxygen);
+      update_check_nm_clima(ui_home, second, minute, hour, mode, am, day, month, year, weekday, temp, icon, battery, connection, steps, distance, kcal, bpm, oxygen);
+      update_check_nm_copiloto(ui_home, second, minute, hour, mode, am, day, month, year, weekday, temp, icon, battery, connection, steps, distance, kcal, bpm, oxygen);
 }
 
 void ui_update_seconds(int second)

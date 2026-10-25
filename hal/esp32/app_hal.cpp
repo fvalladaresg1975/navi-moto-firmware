@@ -45,6 +45,7 @@
 
 #include "ui/custom_face.h"
 #include "common/api.h"
+#include "common/navi_face.h"
 
 #include "main.h"
 #include "displays/pins.h"
@@ -265,6 +266,21 @@ static void streetQPush(const uint8_t *p, int len)
    back, so the widget always shows the watch's real brightness. Changes made on the
    watch's own slider are reported too, BRIGHTNESS_REPORT_MS after the last movement (a
    drag fires dozens of events). */
+/* Extra weather for the Navi Moto faces (0xC9, see dataCallback): chance of rain per
+   hour of the day and today's sunset - the library's weather protocol has neither. One
+   byte each, so plain volatiles are enough (a torn read shows one stale figure for a
+   second). hourlyKnown: the library's own hourly table has been filled at least once
+   (its zeros would otherwise read as "0 km/h wind"). */
+static volatile uint8_t extraRain[24];      // % chance, 255 = unknown
+static volatile int extraSunsetMin = -1;    // minutes after midnight
+static volatile bool hourlyKnown = false;
+static char faceCityBuf[40];
+
+/* Control panel battery readout (board + phone), refreshed while that screen is open. */
+static volatile bool phoneBatteryKnown = false;
+static unsigned long lastControlBatteryMs = 0;
+static lv_obj_t *lastControlBatteryScreen = NULL;
+
 static volatile int pendingBrightness = -1; // 1-255, -1 = report only
 static volatile bool brightnessPending = false;
 static bool brightnessReportDue = false;
@@ -1664,6 +1680,11 @@ void configCallback(Config config, uint32_t a, uint32_t b)
     ESP.restart();
 
     break;
+  case CF_PBAT:
+    // The phone's battery (0x91, sent by the Navi Moto app). Until the first one the
+    // control panel shows "--" rather than the library's default 0 %.
+    phoneBatteryKnown = true;
+    break;
   case CF_WEATHER:
 
     if (a)
@@ -2443,6 +2464,24 @@ void dataCallback(uint8_t *data, int length)
     }
   }
 
+  /* The library's hourly forecast (0xEA 0x7E 0x02): note that it arrived. */
+  if (length >= 6 && data[0] == 0xEA && data[4] == 0x7E && data[5] == 0x02)
+  {
+    hourlyKnown = true;
+  }
+
+  /* 0xC9 = extra weather for the faces. sub 0x01: [sunrise h][sunrise m][sunset h]
+     [sunset m] then 24 x [chance of rain %, 255 = unknown] by hour of day. */
+  if (length >= 6 + 4 + 24 && data[0] == 0xAB && data[4] == 0xC9 && data[5] == 0x01)
+  {
+    const uint8_t *q = &data[6];
+    extraSunsetMin = (q[2] < 24 && q[3] < 60) ? q[2] * 60 + q[3] : -1;
+    for (int h = 0; h < 24; h++)
+    {
+      extraRain[h] = q[4 + h];
+    }
+  }
+
   /* 0xC8 = screen brightness. sub 0x01: [level 1-255] set it; sub 0x00: only report the
      current level (the phone asks on every connection). Applied in hal_loop(). */
   if (length >= 6 && data[0] == 0xAB && data[4] == 0xC8)
@@ -2782,6 +2821,7 @@ void hal_setup()
   }
 
   prefs.begin("my-app");
+  memset((void *)extraRain, 255, sizeof(extraRain)); // chance of rain unknown until 0xC9
 
   int rt = prefs.getInt("rotate", 0);
 
@@ -2905,7 +2945,7 @@ void hal_setup()
   String custom = prefs.getString("custom", "");
   if (wf >= numFaces)
   {
-    wf = 0; // default
+    wf = numFaces > 1 ? 1 : 0; // see the note in the #else branch
   }
   currentIndex = wf;
   if (custom != "" && fsState && loadCustomFace(custom))
@@ -2919,7 +2959,9 @@ void hal_setup()
 #else
   if (wf >= numFaces)
   {
-    wf = 0; // default
+    // A saved index past the end: the 2026 face swap shortened the list (the old
+    // "Pixel" was index 6). Its replacement, "Pixel Moto", comes right after Default.
+    wf = numFaces > 1 ? 1 : 0;
   }
   currentIndex = wf;
   ui_home = *faces[wf].watchface; // load saved watchface power on
@@ -3484,6 +3526,26 @@ void hal_loop()
     routeClearPending = false;
 #endif
 
+    // Battery readout on the control panel: right when it opens, then every second.
+    {
+      lv_obj_t *scr = lv_screen_active();
+      if (scr == ui_controlScreen &&
+          (lastControlBatteryScreen != ui_controlScreen || millis() - lastControlBatteryMs > 1000))
+      {
+        lastControlBatteryMs = millis();
+#if ESPS3_2_06 || ESPS3_1_75
+        int boardPct = watchBatteryPercent;
+        bool boardChg = PMU.isVbusIn(); // plugged in: charging, or full on the charger
+#else
+        int boardPct = -1;
+        bool boardChg = false;
+#endif
+        int phonePct = (phoneBatteryKnown && watch.isConnected()) ? watch.getPhoneBattery() : -1;
+        ui_controlBattery(boardPct, boardChg, phonePct, watch.isPhoneCharging());
+      }
+      lastControlBatteryScreen = scr;
+    }
+
     lv_timer_handler(); // Update the UI-
     delay(5);
 
@@ -3848,6 +3910,50 @@ void hal_loop()
 bool isDay()
 {
   return watch.getHour(true) > 7 && watch.getHour(true) < 21;
+}
+
+/* Data for the Navi Moto faces (src/common/navi_face.h). Called by the face that is on
+   screen, once a second, from hal_loop - the LVGL task. */
+extern "C" void navi_face_get(navi_face_data_t *d)
+{
+  d->hour = watch.getHour(true);
+  d->minute = watch.getMinute();
+  d->second = watch.getSecond();
+  d->day = watch.getDay();
+  d->month = watch.getMonth() + 1;
+  d->year = watch.getYear();
+  d->weekday = watch.getDayofWeek();
+  d->connected = watch.isConnected();
+
+  d->weatherKnown = watch.getWeatherCount() > 0;
+  d->temp = watch.getWeatherAt(0).temp;
+  d->icon = watch.getWeatherAt(0).icon;
+  d->windKmh = hourlyKnown ? watch.getForecastHour(d->hour).wind : -1;
+
+#if ESPS3_2_06 || ESPS3_1_75
+  d->boardPct = watchBatteryPercent;
+  d->boardCharging = PMU.isVbusIn();
+#else
+  d->boardPct = -1;
+  d->boardCharging = false;
+#endif
+  d->phonePct = (phoneBatteryKnown && d->connected) ? watch.getPhoneBattery() : -1;
+  d->phoneCharging = watch.isPhoneCharging();
+
+  get_last_trip(&d->tripMeters, &d->tripSeconds);
+
+  for (int i = 0; i < NAVI_FACE_HOURS; i++)
+  {
+    int h = (d->hour + 1 + i) % 24;
+    d->hourHour[i] = h;
+    d->hourTemp[i] = watch.getForecastHour(h).temp;
+    d->hourRain[i] = extraRain[h] <= 100 ? extraRain[h] : -1;
+  }
+  d->sunsetMin = extraSunsetMin;
+
+  strncpy(faceCityBuf, watch.getWeatherCity().c_str(), sizeof(faceCityBuf) - 1);
+  faceCityBuf[sizeof(faceCityBuf) - 1] = 0;
+  d->city = faceCityBuf;
 }
 
 void update_faces()
