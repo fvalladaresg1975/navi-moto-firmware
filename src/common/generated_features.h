@@ -21,5 +21,6 @@
 // faces
 #include "../faces/nm_clima/nm_clima.h"
 #include "../faces/nm_copiloto/nm_copiloto.h"
+#include "../faces/nm_foto/nm_foto.h"
 #include "../faces/nm_pixel/nm_pixel.h"
 #include "../faces/nm_tablero/nm_tablero.h"

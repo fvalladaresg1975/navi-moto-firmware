@@ -22,6 +22,7 @@
 #define ENABLE_FACE_NM_TABLERO  // (Tablero)
 #define ENABLE_FACE_NM_CLIMA    // (Clima de ruta)
 #define ENABLE_FACE_NM_COPILOTO // (Copiloto)
+#define ENABLE_FACE_NM_FOTO     // (Foto) - background photo sent from the phone (0xCA)
 
 #elif defined(VIEWE_ECHO_EAR)
 

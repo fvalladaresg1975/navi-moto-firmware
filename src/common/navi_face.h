@@ -48,6 +48,15 @@ extern "C"
     /* Implemented in the HAL. */
     void navi_face_get(navi_face_data_t *d);
 
+    /* The "Foto" face's background, sent from the phone (0xCA) and kept in the board's
+       flash: the decoded image (RGB565 in PSRAM), or NULL if no photo was ever sent.
+       photo_serial changes every time a new one is decoded, so the face knows to reload
+       it; photo_pos is where the user placed the time: 0 top, 1 centre, 2 bottom. Also
+       implemented in the HAL. */
+    const lv_image_dsc_t *navi_face_photo(void);
+    uint32_t navi_face_photo_serial(void);
+    int navi_face_photo_pos(void);
+
     /* Spanish day / month names. */
     extern const char *NF_WEEKDAYS[7];      /* "Domingo".. */
     extern const char *NF_WEEKDAYS_ABBR[7]; /* "DOM".. */

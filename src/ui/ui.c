@@ -10,6 +10,7 @@
 */
 
 #include "ui.h"
+#include "../common/navi_face.h" // big Montserrat fonts (src/fonts_nm)
 #include "ui_helpers.h"
 
 #include "display/lv_display_private.h"
@@ -142,10 +143,6 @@ lv_obj_t *ui_batteryRuntimeLabel;
 lv_obj_t *ui_aboutPanel;
 lv_obj_t *ui_aboutIcon;
 lv_obj_t *ui_aboutText;
-void ui_event_kenyaPanel(lv_event_t *e);
-lv_obj_t *ui_kenyaPanel;
-lv_obj_t *ui_kenyaIcon;
-lv_obj_t *ui_kenyaText;
 void ui_event_controlScreen(lv_event_t *e);
 lv_obj_t *ui_controlScreen;
 lv_obj_t *ui_controlReturnScreen = NULL;
@@ -1071,23 +1068,6 @@ void ui_event_batterySlider(lv_event_t *e)
       if (event_code == LV_EVENT_RELEASED)
       {
             onBatteryChange(e);
-      }
-}
-
-void ui_event_kenyaPanel(lv_event_t *e)
-{
-      lv_disp_t *display = lv_display_get_default();
-      lv_obj_t *actScr = lv_display_get_screen_active(display);
-      if (actScr != ui_settingsScreen)
-      {
-            return;
-      }
-
-      lv_event_code_t event_code = lv_event_get_code(e);
-      lv_obj_t *target = lv_event_get_target(e);
-      if (event_code == LV_EVENT_CLICKED)
-      {
-            _ui_screen_change(ui_logoScreen, LV_SCR_LOAD_ANIM_FADE_ON, 500, 0);
       }
 }
 
@@ -2576,6 +2556,30 @@ void ui_clockScreen_screen_init(void)
       lv_label_set_text(ui_amPmLabel, "PM");
       lv_obj_set_style_text_font(ui_amPmLabel, &lv_font_montserrat_20, LV_PART_MAIN | LV_STATE_DEFAULT);
 
+#if UI_SCREEN_MIN_PX >= 400
+      /* Large round panels (the 466 px Navi Moto board): the layout above only scales the
+         positions of this 240 px design, its fonts stay 48/20/16 px and the face looked
+         small (user: "quedó algo pequeña"). Same arrangement - hour top left, date beside
+         it, weather bottom left, minutes bottom right - with the Navi Moto faces' big
+         Montserrat (src/fonts_nm), re-placed to fit the circle. */
+      lv_obj_set_style_text_font(ui_hourLabel, &nm_digits_120, LV_PART_MAIN | LV_STATE_DEFAULT);
+      lv_obj_set_width(ui_hourLabel, 200);
+      lv_obj_align(ui_hourLabel, LV_ALIGN_CENTER, -110, -58);
+      lv_obj_set_style_text_font(ui_dateLabel, &nm_text_28, LV_PART_MAIN | LV_STATE_DEFAULT);
+      lv_obj_set_width(ui_dateLabel, 120);
+      lv_obj_align(ui_dateLabel, LV_ALIGN_CENTER, 72, -58);
+      lv_obj_set_style_text_font(ui_minuteLabel, &nm_digits_120, LV_PART_MAIN | LV_STATE_DEFAULT);
+      lv_obj_align(ui_minuteLabel, LV_ALIGN_CENTER, 78, 72);
+      lv_image_set_scale(ui_weatherIcon, 400); // ~100 px
+      lv_obj_align(ui_weatherIcon, LV_ALIGN_CENTER, -88, 52);
+      lv_obj_set_style_text_font(ui_weatherTemp, &nm_text_28, LV_PART_MAIN | LV_STATE_DEFAULT);
+      lv_obj_align(ui_weatherTemp, LV_ALIGN_CENTER, -88, 122);
+      lv_obj_set_style_text_font(ui_dayLabel, &nm_text_28, LV_PART_MAIN | LV_STATE_DEFAULT);
+      lv_obj_align(ui_dayLabel, LV_ALIGN_CENTER, 0, -152);
+      lv_obj_set_style_text_font(ui_amPmLabel, &nm_text_28, LV_PART_MAIN | LV_STATE_DEFAULT);
+      lv_obj_align(ui_amPmLabel, LV_ALIGN_CENTER, 78, 160);
+#endif
+
       ui_alertPanel = lv_obj_create(ui_clockScreen);
       // Was laid out for a 240x240 screen; UI_SCALE_PX grows it for larger displays
       // (see pins.h) so it doesn't sit as a tiny fixed-size banner on a 466x466 screen.
@@ -3379,42 +3383,6 @@ void ui_settingsScreen_screen_init(void)
       lv_obj_set_y(ui_aboutText, UI_SCALE_PX(7));
       lv_label_set_text(ui_aboutText, "Navi Moto");
 
-      ui_kenyaPanel = lv_obj_create(ui_settingsList);
-      lv_obj_set_width(ui_kenyaPanel, UI_SCALE_PX(200));
-      lv_obj_set_height(ui_kenyaPanel, LV_SIZE_CONTENT); /// 64
-      lv_obj_set_align(ui_kenyaPanel, LV_ALIGN_CENTER);
-      lv_obj_remove_flag(ui_kenyaPanel, LV_OBJ_FLAG_SCROLLABLE); /// Flags
-      lv_obj_set_style_radius(ui_kenyaPanel, 0, LV_PART_MAIN | LV_STATE_DEFAULT);
-      lv_obj_set_style_bg_color(ui_kenyaPanel, lv_color_hex(0x000000), LV_PART_MAIN | LV_STATE_DEFAULT);
-      lv_obj_set_style_bg_opa(ui_kenyaPanel, 255, LV_PART_MAIN | LV_STATE_DEFAULT);
-      lv_obj_set_style_border_color(ui_kenyaPanel, lv_color_hex(0xFFFFFF), LV_PART_MAIN | LV_STATE_DEFAULT);
-      lv_obj_set_style_border_opa(ui_kenyaPanel, 255, LV_PART_MAIN | LV_STATE_DEFAULT);
-      lv_obj_set_style_border_width(ui_kenyaPanel, 1, LV_PART_MAIN | LV_STATE_DEFAULT);
-      lv_obj_set_style_border_side(ui_kenyaPanel, LV_BORDER_SIDE_BOTTOM, LV_PART_MAIN | LV_STATE_DEFAULT);
-      lv_obj_set_style_pad_left(ui_kenyaPanel, 0, LV_PART_MAIN | LV_STATE_DEFAULT);
-      lv_obj_set_style_pad_right(ui_kenyaPanel, 0, LV_PART_MAIN | LV_STATE_DEFAULT);
-      lv_obj_set_style_pad_top(ui_kenyaPanel, 0, LV_PART_MAIN | LV_STATE_DEFAULT);
-      lv_obj_set_style_pad_bottom(ui_kenyaPanel, 5, LV_PART_MAIN | LV_STATE_DEFAULT);
-
-      ui_kenyaIcon = lv_image_create(ui_kenyaPanel);
-      lv_image_set_src(ui_kenyaIcon, &ui_img_kenya_png);
-      lv_obj_set_width(ui_kenyaIcon, LV_SIZE_CONTENT);  /// 1
-      lv_obj_set_height(ui_kenyaIcon, LV_SIZE_CONTENT); /// 1
-      lv_obj_set_x(ui_kenyaIcon, UI_SCALE_PX(-5));
-      lv_obj_set_y(ui_kenyaIcon, UI_SCALE_PX(2));
-      lv_obj_add_flag(ui_kenyaIcon, LV_OBJ_FLAG_ADV_HITTEST);   /// Flags
-      lv_obj_remove_flag(ui_kenyaIcon, LV_OBJ_FLAG_SCROLLABLE); /// Flags
-      lv_image_set_scale(ui_kenyaIcon, (150 * UI_SCALE) / 256);
-
-      ui_kenyaText = lv_label_create(ui_kenyaPanel);
-      lv_obj_set_width(ui_kenyaText, UI_SCALE_PX(130));
-      lv_obj_set_height(ui_kenyaText, LV_SIZE_CONTENT); /// 1
-      lv_obj_set_x(ui_kenyaText, UI_SCALE_PX(60));
-      lv_obj_set_y(ui_kenyaText, UI_SCALE_PX(7));
-      // lv_label_set_recolor(ui_kenyaText, true);
-      lv_label_set_text(ui_kenyaText, "Hecho con amor\nen Kenia\nusando LVGL");
-
-      lv_obj_add_event_cb(ui_kenyaPanel, ui_event_kenyaPanel, LV_EVENT_ALL, NULL);
       lv_obj_add_event_cb(ui_aboutPanel, ui_event_aboutPanel, LV_EVENT_ALL, NULL);
 
       lv_obj_add_event_cb(ui_settingsList, onScroll, LV_EVENT_SCROLL, NULL);
@@ -4262,6 +4230,7 @@ void ui_watchfaces_init(void)
       init_face_nm_tablero(registerWatchface_cb);
       init_face_nm_clima(registerWatchface_cb);
       init_face_nm_copiloto(registerWatchface_cb);
+      init_face_nm_foto(registerWatchface_cb);
 }
 
 void ui_update_watchfaces(int second, int minute, int hour, bool mode, bool am, int day, int month, int year, int weekday,
@@ -4271,6 +4240,7 @@ void ui_update_watchfaces(int second, int minute, int hour, bool mode, bool am, 
       update_check_nm_tablero(ui_home, second, minute, hour, mode, am, day, month, year, weekday, temp, icon, battery, connection, steps, distance, kcal, bpm, oxygen);
       update_check_nm_clima(ui_home, second, minute, hour, mode, am, day, month, year, weekday, temp, icon, battery, connection, steps, distance, kcal, bpm, oxygen);
       update_check_nm_copiloto(ui_home, second, minute, hour, mode, am, day, month, year, weekday, temp, icon, battery, connection, steps, distance, kcal, bpm, oxygen);
+      update_check_nm_foto(ui_home, second, minute, hour, mode, am, day, month, year, weekday, temp, icon, battery, connection, steps, distance, kcal, bpm, oxygen);
 }
 
 void ui_update_seconds(int second)

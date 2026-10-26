@@ -122,10 +122,6 @@ extern "C"
     extern lv_obj_t *ui_aboutPanel;
     extern lv_obj_t *ui_aboutIcon;
     extern lv_obj_t *ui_aboutText;
-    void ui_event_kenyaPanel(lv_event_t *e);
-    extern lv_obj_t *ui_kenyaPanel;
-    extern lv_obj_t *ui_kenyaIcon;
-    extern lv_obj_t *ui_kenyaText;
     void ui_event_controlScreen(lv_event_t *e);
     extern lv_obj_t *ui_controlScreen;
     /* Where the control (music/volume) screen returns to on swipe-up. NULL = ui_home, the
@@ -388,7 +384,6 @@ extern "C"
     LV_IMG_DECLARE(ui_img_vol_down_png);        // assets\vol_down.png
     LV_IMG_DECLARE(ui_img_pay_png);             // assets\pay.png
     LV_IMG_DECLARE(ui_img_web_png);             // assets\web.png
-    LV_IMG_DECLARE(ui_img_kenya_png);           // assets\kenya.png
     LV_IMG_DECLARE(ui_img_lvgl_logo_png);       // assets\lvgl_logo.png
     LV_IMG_DECLARE(ui_img_lvgl_logo_black_png); // assets/lvgl_logo_black.png
     LV_IMG_DECLARE(ui_img_lvgl_logo_red_png);   // assets/lvgl_logo_red.png

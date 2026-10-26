@@ -41,6 +41,7 @@
 #include "feedback.h"
 
 #include <lvgl.h>
+#include "src/libs/tjpgd/tjpgd.h" // LVGL's TJpgDec, for the "Foto" face's photo
 #include "ui/ui.h"
 
 #include "ui/custom_face.h"
@@ -275,6 +276,35 @@ static volatile uint8_t extraRain[24];      // % chance, 255 = unknown
 static volatile int extraSunsetMin = -1;    // minutes after midnight
 static volatile bool hourlyKnown = false;
 static char faceCityBuf[40];
+
+/* 0xCA: the "Foto" face's photo (src/faces/nm_foto). Phone -> watch, in order:
+     sub 0x00 start [size u32][crc32 u32][time position u8: 0 top, 1 centre, 2 bottom]
+     sub 0x01 data  [offset u32][JPEG bytes...]  (whole packets, one BLE write each)
+     sub 0x02 end
+     sub 0x03 remove the photo
+   The BLE task only copies the bytes into a PSRAM buffer it owns until photoRxDone;
+   hal_loop() then checks them, decodes the JPEG for the face, saves it to FFat
+   (PHOTO_FILE, loaded again at boot) and answers {AB 00 04 FF CA 80 status}:
+   1 ok, 2 transfer or CRC error, 3 not a JPEG the decoder reads (baseline, at most
+   PHOTO_MAX_PX a side), 4 out of memory or flash error. */
+#define PHOTO_MAX_BYTES (300UL * 1024UL)
+#define PHOTO_MAX_PX 480
+#define PHOTO_FILE "/photo.jpg"
+#define PHOTO_TMP "/photo.tmp"
+static uint8_t *photoRx = NULL;
+static uint32_t photoRxSize = 0, photoRxCrc = 0, photoRxGot = 0;
+static uint8_t photoRxPos = 1;
+static bool photoRxBad = false;
+static volatile bool photoRxDone = false;
+static volatile bool photoRemovePending = false;
+static lv_image_dsc_t photoDsc;
+static uint16_t *photoPixels = NULL; // photoDsc's pixels; NULL = no photo
+static uint32_t photoSerial = 0;
+static int photoPos = 1;
+static bool photoFsReady = false;
+static void photoProcessReceived(void);
+static void photoRemove(void);
+static void photoLoadSaved(void);
 
 /* Control panel battery readout (board + phone), refreshed while that screen is open. */
 static volatile bool phoneBatteryKnown = false;
@@ -2493,6 +2523,55 @@ void dataCallback(uint8_t *data, int length)
     brightnessPending = true;
   }
 
+  /* 0xCA = photo for the "Foto" face (see photoRx). The phone's packets end with one
+     padding byte, so the payload is data[6 .. length - 2]. */
+  if (length >= 7 && data[0] == 0xAB && data[4] == 0xCA && !photoRxDone)
+  {
+    const uint8_t *q = &data[6];
+    uint32_t n = length - 7;
+    if (data[5] == 0x00 && n >= 9)
+    {
+      uint32_t size = ((uint32_t)q[0] << 24) | ((uint32_t)q[1] << 16) | ((uint32_t)q[2] << 8) | q[3];
+      if (photoRx)
+      {
+        heap_caps_free(photoRx); // an earlier transfer that never finished
+        photoRx = NULL;
+      }
+      photoRxCrc = ((uint32_t)q[4] << 24) | ((uint32_t)q[5] << 16) | ((uint32_t)q[6] << 8) | q[7];
+      photoRxPos = q[8];
+      photoRxGot = 0;
+      photoRxSize = size;
+      if (size > 0 && size <= PHOTO_MAX_BYTES)
+      {
+        photoRx = (uint8_t *)heap_caps_malloc(size, MALLOC_CAP_SPIRAM);
+      }
+      photoRxBad = photoRx == NULL;
+    }
+    else if (data[5] == 0x01 && n >= 4)
+    {
+      uint32_t off = ((uint32_t)q[0] << 24) | ((uint32_t)q[1] << 16) | ((uint32_t)q[2] << 8) | q[3];
+      n -= 4;
+      if (!photoRx || off != photoRxGot || off + n > photoRxSize)
+      {
+        photoRxBad = true; // a lost or repeated packet: the CRC check would fail anyway
+      }
+      else if (!photoRxBad)
+      {
+        memcpy(photoRx + off, q + 4, n);
+        photoRxGot += n;
+      }
+    }
+    else if (data[5] == 0x02)
+    {
+      __sync_synchronize(); // the buffer before the flag hal_loop() looks at
+      photoRxDone = true;
+    }
+    else if (data[5] == 0x03)
+    {
+      photoRemovePending = true;
+    }
+  }
+
   /* 0xC7 = street layer. sub 0x00: forget all; sub 0x01: add streets (payload from
      data[6], parsed and bounds-checked in navStreetsAdd). */
   if (length >= 6 && data[0] == 0xAB && data[4] == 0xC7)
@@ -2939,6 +3018,8 @@ void hal_setup()
     Serial.println("Setup FS failed");
     // showError(F_NAME, "Failed to mount the partition");
   }
+
+  photoLoadSaved(); // before the saved face is shown: it may be "Foto"
 
   int wf = prefs.getInt("watchface", 0);
 #ifdef ENABLE_CUSTOM_FACE
@@ -3420,6 +3501,16 @@ void hal_loop()
     {
       brightnessReportDue = false;
       reportBrightness();
+    }
+
+    if (photoRxDone)
+    {
+      photoProcessReceived();
+    }
+    if (photoRemovePending)
+    {
+      photoRemovePending = false;
+      photoRemove();
     }
 
     if (musicStatePending)
@@ -3954,6 +4045,268 @@ extern "C" void navi_face_get(navi_face_data_t *d)
   strncpy(faceCityBuf, watch.getWeatherCity().c_str(), sizeof(faceCityBuf) - 1);
   faceCityBuf[sizeof(faceCityBuf) - 1] = 0;
   d->city = faceCityBuf;
+}
+
+/* ---- "Foto" face photo (0xCA, see photoRx) ---- */
+
+extern "C" const lv_image_dsc_t *navi_face_photo(void)
+{
+  return photoPixels ? &photoDsc : NULL;
+}
+
+extern "C" uint32_t navi_face_photo_serial(void)
+{
+  return photoSerial;
+}
+
+extern "C" int navi_face_photo_pos(void)
+{
+  return photoPos;
+}
+
+static void photoReport(uint8_t status)
+{
+  uint8_t cmd[] = {0xAB, 0x00, 0x04, 0xFF, 0xCA, 0x80, status};
+  watch.sendCommand(cmd, 7);
+}
+
+/* Standard CRC-32 (zlib / java.util.zip.CRC32), what the phone sends. */
+static uint32_t photoCrc32(const uint8_t *p, uint32_t n)
+{
+  uint32_t c = 0xFFFFFFFFUL;
+  while (n--)
+  {
+    c ^= *p++;
+    for (int k = 0; k < 8; k++)
+    {
+      c = (c >> 1) ^ (0xEDB88320UL & (0UL - (c & 1)));
+    }
+  }
+  return ~c;
+}
+
+/* FFat is otherwise not mounted on this board (setupFS() only serves the upstream custom
+   faces), so the photo mounts it itself, the first time it is needed. */
+static bool photoMountFs(void)
+{
+  if (!photoFsReady)
+  {
+    photoFsReady = FFat.begin(true, "/ffat", 2);
+    Serial.printf("[PHOTO] FFat mount %s\n", photoFsReady ? "ok" : "FAILED");
+  }
+  return photoFsReady;
+}
+
+typedef struct
+{
+  const uint8_t *src;
+  uint32_t len, pos;
+  uint16_t *dst;
+  uint16_t w;
+} photo_jd_io_t;
+
+static size_t photoJdIn(JDEC *jd, uint8_t *buf, size_t n)
+{
+  photo_jd_io_t *io = (photo_jd_io_t *)jd->device;
+  if (n > io->len - io->pos)
+  {
+    n = io->len - io->pos;
+  }
+  if (buf)
+  {
+    memcpy(buf, io->src + io->pos, n);
+  }
+  io->pos += n;
+  return n;
+}
+
+/* tjpgd hands over decoded blocks as 24-bit pixels (JD_FORMAT 0) in LVGL's RGB888 byte
+   order, which is B, G, R - LVGL's copy of tjpgd was changed for that. Read as R, G, B
+   the first build showed every photo blue-tinted (skin came out blue). LVGL wants RGB565. */
+static int photoJdOut(JDEC *jd, void *bitmap, JRECT *r)
+{
+  photo_jd_io_t *io = (photo_jd_io_t *)jd->device;
+  const uint8_t *s = (const uint8_t *)bitmap;
+  for (int y = r->top; y <= r->bottom; y++)
+  {
+    uint16_t *d = io->dst + y * io->w + r->left;
+    for (int x = r->left; x <= r->right; x++, s += 3)
+    {
+      *d++ = ((s[2] & 0xF8) << 8) | ((s[1] & 0xFC) << 3) | (s[0] >> 3);
+    }
+  }
+  return 1;
+}
+
+/* Decodes a JPEG into a new PSRAM image and, if that worked, shows it instead of the
+   current one. Returns a 0xCA status (1 ok, 3 unreadable, 4 no memory). Runs on the LVGL
+   task, so swapping the pixels under the face is safe (nothing is mid-draw). */
+static uint8_t photoDecode(const uint8_t *jpg, uint32_t len)
+{
+  const size_t poolSize = 4096; // what LVGL's own tjpgd decoder uses
+  void *pool = malloc(poolSize);
+  if (!pool)
+  {
+    return 4;
+  }
+  photo_jd_io_t io = {jpg, len, 0, NULL, 0};
+  JDEC jd;
+  JRESULT rc = jd_prepare(&jd, photoJdIn, pool, poolSize, &io);
+  if (rc != JDR_OK || jd.width == 0 || jd.height == 0 || jd.width > PHOTO_MAX_PX || jd.height > PHOTO_MAX_PX)
+  {
+    free(pool);
+    Serial.printf("[PHOTO] jd_prepare rc=%d %ux%u\n", (int)rc, rc == JDR_OK ? jd.width : 0, rc == JDR_OK ? jd.height : 0);
+    return rc == JDR_MEM1 ? 4 : 3;
+  }
+  uint16_t *px = (uint16_t *)heap_caps_calloc((size_t)jd.width * jd.height, 2, MALLOC_CAP_SPIRAM);
+  if (!px)
+  {
+    free(pool);
+    return 4;
+  }
+  io.dst = px;
+  io.w = jd.width;
+  unsigned long t0 = millis();
+  rc = jd_decomp(&jd, photoJdOut, 0);
+  free(pool);
+  if (rc != JDR_OK)
+  {
+    heap_caps_free(px);
+    Serial.printf("[PHOTO] jd_decomp rc=%d\n", (int)rc);
+    return 3;
+  }
+  Serial.printf("[PHOTO] decoded %ux%u in %lu ms\n", jd.width, jd.height, millis() - t0);
+
+  uint16_t *old = (uint16_t *)photoDsc.data; // also a removed photo's (photoRemove)
+  memset(&photoDsc, 0, sizeof(photoDsc));
+  photoDsc.header.magic = LV_IMAGE_HEADER_MAGIC;
+  photoDsc.header.cf = LV_COLOR_FORMAT_RGB565;
+  photoDsc.header.w = jd.width;
+  photoDsc.header.h = jd.height;
+  photoDsc.header.stride = jd.width * 2;
+  photoDsc.data_size = (uint32_t)jd.width * jd.height * 2;
+  photoDsc.data = (const uint8_t *)px;
+  photoPixels = px;
+  lv_image_cache_drop(&photoDsc);
+  photoSerial++;
+  if (old)
+  {
+    heap_caps_free(old);
+  }
+  return 1;
+}
+
+static bool photoSave(const uint8_t *p, uint32_t n)
+{
+  if (!photoMountFs())
+  {
+    return false;
+  }
+  File f = FFat.open(PHOTO_TMP, FILE_WRITE);
+  if (!f)
+  {
+    return false;
+  }
+  size_t w = f.write(p, n);
+  f.close();
+  if (w != n)
+  {
+    FFat.remove(PHOTO_TMP);
+    return false;
+  }
+  FFat.remove(PHOTO_FILE);
+  return FFat.rename(PHOTO_TMP, PHOTO_FILE);
+}
+
+/* A transfer finished (photoRxDone): check, show, save, answer. */
+static void photoProcessReceived(void)
+{
+  __sync_synchronize();
+  uint8_t status;
+  if (photoRxBad || !photoRx || photoRxGot != photoRxSize)
+  {
+    status = 2;
+  }
+  else if (photoCrc32(photoRx, photoRxSize) != photoRxCrc)
+  {
+    status = 2;
+  }
+  else
+  {
+    status = photoDecode(photoRx, photoRxSize);
+    if (status == 1)
+    {
+      photoPos = photoRxPos <= 2 ? photoRxPos : 1;
+      prefs.putInt("photoPos", photoPos);
+      unsigned long t0 = millis();
+      bool saved = photoSave(photoRx, photoRxSize); // shown already; this keeps it over a reboot
+      Serial.printf("[PHOTO] %u bytes saved=%d in %lu ms\n", (unsigned)photoRxSize, saved, millis() - t0);
+      prefs.putBool("photo", saved);
+      if (!saved)
+      {
+        status = 4;
+      }
+    }
+  }
+  Serial.printf("[PHOTO] status %d (got %u of %u)\n", status, (unsigned)photoRxGot, (unsigned)photoRxSize);
+  if (photoRx)
+  {
+    heap_caps_free(photoRx);
+    photoRx = NULL;
+  }
+  photoRxSize = photoRxGot = 0;
+  photoRxBad = false;
+  __sync_synchronize();
+  photoRxDone = false; // the BLE task may take a new transfer now
+  photoReport(status);
+}
+
+static void photoRemove(void)
+{
+  if (photoPixels)
+  {
+    // The face lets go of the image on its next update (navi_face_photo() is NULL now),
+    // but until then - or until it is next shown, if another face is on screen - its
+    // image object still draws photoDsc. So the pixels stay allocated, blacked out, and
+    // are only freed when the next photo replaces them (photoDecode).
+    memset(photoPixels, 0, photoDsc.data_size);
+    photoPixels = NULL;
+    photoSerial++;
+    lv_image_cache_drop(&photoDsc);
+    lv_obj_invalidate(lv_screen_active());
+  }
+  prefs.putBool("photo", false);
+  if (photoMountFs())
+  {
+    FFat.remove(PHOTO_FILE);
+  }
+  photoReport(1);
+}
+
+/* Boot: the last photo, if one was ever saved. */
+static void photoLoadSaved(void)
+{
+  photoPos = prefs.getInt("photoPos", 1);
+  if (!prefs.getBool("photo", false) || !photoMountFs())
+  {
+    return;
+  }
+  File f = FFat.open(PHOTO_FILE, FILE_READ);
+  if (!f)
+  {
+    return;
+  }
+  size_t n = f.size();
+  uint8_t *buf = (n > 0 && n <= PHOTO_MAX_BYTES) ? (uint8_t *)heap_caps_malloc(n, MALLOC_CAP_SPIRAM) : NULL;
+  if (buf && f.read(buf, n) == n)
+  {
+    photoDecode(buf, n);
+  }
+  f.close();
+  if (buf)
+  {
+    heap_caps_free(buf);
+  }
 }
 
 void update_faces()

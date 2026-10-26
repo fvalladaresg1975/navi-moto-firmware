@@ -672,7 +672,7 @@
 
 /* JPG + split JPG decoder library.
  * Split JPG is a custom format optimized for embedded systems. */
-#define LV_USE_TJPGD 0
+#define LV_USE_TJPGD 1 // Navi Moto "Foto" face: the HAL decodes the phone's JPEG with it (photo_decode)
 
 /* libjpeg-turbo decoder library.
  * Supports complete JPEG specifications and high-performance JPEG decoding. */
