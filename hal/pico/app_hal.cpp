@@ -43,7 +43,7 @@
 
 #include "main.h"
 #include "pins.h"
-#include "splash.h"
+#include "splash_moto.h"
 
 #ifdef ENABLE_APP_QMI8658C
 #include "FastIMU.h"
@@ -586,17 +586,19 @@ void my_log_cb(const char *buf)
 
 void loadSplash()
 {
-  int w = 122;
-  int h = 130;
-  int xOffset = 63;
-  int yOffset = 55;
+  // The Navi Moto motorcycle (include/splash_moto.h), static and centred; it replaced the
+  // upstream "ESP32 C3 Mini" logo. Same big-endian RGB565 layout as the old image.
+  int w = SPLASH_MOTO_W;
+  int h = SPLASH_MOTO_H;
+  int xOffset = (240 - w) / 2;
+  int yOffset = (240 - h) / 2;
   tft.fillScreen(TFT_BLACK);
   screenBrightness(200);
   for (int y = 0; y < h; y++)
   {
     for (int x = 0; x < w; x++)
     {
-      tft.writePixel(x + xOffset, y + yOffset, uint16_t(splash[(((y * w) + x) * 2)] << 8 | splash[(((y * w) + x) * 2) + 1]));
+      tft.writePixel(x + xOffset, y + yOffset, uint16_t(splash_moto[(((y * w) + x) * 2)] << 8 | splash_moto[(((y * w) + x) * 2) + 1]));
     }
   }
 

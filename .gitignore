@@ -9,7 +9,9 @@ prefs.txt
 scripts/api_migrate.py
 build.py
 /firmware
-/test/hardware
+# build outputs copied by support/*_build_extra.py (the upstream prebuilt simulator
+# programs that used to be committed here were removed)
+/test/
 
 # Local rollback snapshots (firmware binaries + notes), not source
 backups/
