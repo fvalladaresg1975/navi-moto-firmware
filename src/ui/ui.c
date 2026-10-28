@@ -313,12 +313,12 @@ const lv_image_dsc_t *notificationIcons[] = {
     &ui_img_viber_png,     // Viber
     &ui_img_vkontakte_png, // Vkontakte
     &ui_img_telegram_png,  // Telegram
-    &ui_img_chrns_png,     // Chronos
+    &ui_img_navimoto_app_32, // Chronos (the Navi Moto badge)
     &ui_img_wechat_png     // Wechat
 };
 
 const lv_image_dsc_t *qrIcons[] = {
-    &ui_img_chrns_png,
+    &ui_img_navimoto_app_32,
     &ui_img_wechat_png,
     &ui_img_facebook_png,
     &ui_img_penguin_png,
@@ -2828,7 +2828,7 @@ void ui_notificationScreen_screen_init(void)
       lv_obj_set_style_pad_bottom(ui_messagePanel, 70, LV_PART_MAIN | LV_STATE_DEFAULT);
 
       ui_messageIcon = lv_image_create(ui_messagePanel);
-      lv_image_set_src(ui_messageIcon, &ui_img_chrns_png);
+      lv_image_set_src(ui_messageIcon, &UI_IMG_NAVIMOTO_APP);
       lv_obj_set_width(ui_messageIcon, LV_SIZE_CONTENT);  /// 1
       lv_obj_set_height(ui_messageIcon, LV_SIZE_CONTENT); /// 1
       lv_obj_set_align(ui_messageIcon, LV_ALIGN_CENTER);
@@ -2847,6 +2847,25 @@ void ui_notificationScreen_screen_init(void)
       lv_obj_set_align(ui_messageContent, LV_ALIGN_CENTER);
       lv_label_set_text(ui_messageContent, "Conecta el navegador con la app Navi Moto en tu celular para recibir notificaciones");
 
+#if UI_SCREEN_MIN_PX >= 400
+      /* Large round panels: the opened notification used the 240 px design's fonts
+         (montserrat_14 text, 32 px icon) and read tiny on the 466 px screen (user: "se ve
+         muy pequeña la fuente"). Bigger icon (stretched - a scaled image would keep its
+         32 px layout box and overlap the time), time at 20 px, the message in the faces'
+         28 px Latin-1 Montserrat, centred for the circle. Bottom padding leaves room to
+         scroll the end of a long message above the clear button (app_hal.cpp). */
+      lv_obj_set_style_pad_top(ui_messagePanel, 56, LV_PART_MAIN | LV_STATE_DEFAULT);
+      lv_obj_set_style_pad_bottom(ui_messagePanel, 120, LV_PART_MAIN | LV_STATE_DEFAULT);
+      lv_obj_set_style_pad_row(ui_messagePanel, 10, LV_PART_MAIN | LV_STATE_DEFAULT);
+      lv_obj_set_size(ui_messageIcon, 64, 64);
+      lv_image_set_inner_align(ui_messageIcon, LV_IMAGE_ALIGN_STRETCH);
+      lv_obj_set_style_text_font(ui_messageTime, &lv_font_montserrat_20, LV_PART_MAIN | LV_STATE_DEFAULT);
+      lv_obj_set_style_text_color(ui_messageTime, lv_color_hex(0xB0B0B0), LV_PART_MAIN | LV_STATE_DEFAULT);
+      lv_obj_set_width(ui_messageContent, 340);
+      lv_obj_set_style_text_font(ui_messageContent, &nm_text_28, LV_PART_MAIN | LV_STATE_DEFAULT);
+      lv_obj_set_style_text_align(ui_messageContent, LV_TEXT_ALIGN_CENTER, LV_PART_MAIN | LV_STATE_DEFAULT);
+#endif
+
       ui_messageList = lv_obj_create(ui_notificationScreen);
       lv_obj_set_width(ui_messageList, lv_pct(100));
       lv_obj_set_height(ui_messageList, lv_pct(100));
@@ -2864,6 +2883,10 @@ void ui_notificationScreen_screen_init(void)
       lv_obj_set_style_pad_right(ui_messageList, 0, LV_PART_MAIN | LV_STATE_DEFAULT);
       lv_obj_set_style_pad_top(ui_messageList, 50, LV_PART_MAIN | LV_STATE_DEFAULT);
       lv_obj_set_style_pad_bottom(ui_messageList, 70, LV_PART_MAIN | LV_STATE_DEFAULT);
+#if UI_SCREEN_MIN_PX >= 400
+      // The clear button now sits at the bottom (app_hal.cpp): let the last row scroll above it.
+      lv_obj_set_style_pad_bottom(ui_messageList, 110, LV_PART_MAIN | LV_STATE_DEFAULT);
+#endif
 
       lv_obj_add_event_cb(ui_messageList, onScroll, LV_EVENT_SCROLL, NULL);
 
@@ -3858,7 +3881,7 @@ void ui_appInfoScreen_screen_init(void)
       lv_obj_set_style_pad_bottom(ui_appDetailsPanel, 0, LV_PART_MAIN | LV_STATE_DEFAULT);
 
       ui_appDetailsIcon = lv_image_create(ui_appDetailsPanel);
-      lv_image_set_src(ui_appDetailsIcon, &ui_img_chrns_png);
+      lv_image_set_src(ui_appDetailsIcon, &UI_IMG_NAVIMOTO_APP);
       lv_obj_set_width(ui_appDetailsIcon, LV_SIZE_CONTENT);  /// 1
       lv_obj_set_height(ui_appDetailsIcon, LV_SIZE_CONTENT); /// 1
       lv_obj_set_align(ui_appDetailsIcon, LV_ALIGN_LEFT_MID);

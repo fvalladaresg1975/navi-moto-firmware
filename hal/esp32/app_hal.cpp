@@ -1932,8 +1932,14 @@ void onClearNotifications(lv_event_t *e)
   watch.clearNotifications();
   notificationsUpdate = false;
   lv_obj_clean(ui_messageList);
+  // The message view shown now still held the last opened notification, so clearing
+  // looked like it had done nothing (user: "no puedo limpiarlos"). Show the empty state.
+  lv_label_set_text(ui_messageTime, "Sin notificaciones");
+  lv_label_set_text(ui_messageContent, "");
+  lv_image_set_src(ui_messageIcon, &UI_IMG_NAVIMOTO_APP);
   lv_obj_add_flag(ui_messageList, LV_OBJ_FLAG_HIDDEN);
   lv_obj_remove_flag(ui_messagePanel, LV_OBJ_FLAG_HIDDEN);
+  feedbackVibrate(v_notif, 2, true);
 }
 
 // Custom watch->phone command for the call accept/reject buttons - reuses
@@ -3282,21 +3288,17 @@ void hal_setup()
   lv_obj_set_style_text_font(info, &lv_font_montserrat_14, LV_PART_MAIN | LV_STATE_DEFAULT);
   lv_label_set_text(info, "No hay notificaciones disponibles. Conecta el navegador con la app Navi Moto en tu celular");
 
-  // Positioned top-mid (not top-right) with a modest offset: this is a round display,
-  // so a literal screen corner (e.g. TOP_RIGHT with a small inset) falls outside the
-  // visible circular area and is clipped by the bezel - unlike a rectangular screen,
-  // "near the top and off to one side" only stays visible if it hugs the vertical
-  // center line. Also kept above y=50 (the notification list's own top padding, see
-  // ui_messageList's pad_top in ui.c) so it never sits under the first list item.
+  // Bottom centre, the most reachable spot on a round screen (the first version sat top
+  // right of centre, up against the bezel - user: "muy arriba a la derecha"). Grown with
+  // the panel (stretched, so its touch area grows too); the list and the opened message
+  // keep enough bottom padding (ui.c) to scroll their last line above it.
   lv_obj_t *ui_clearNotifications = lv_image_create(ui_notificationScreen);
   lv_image_set_src(ui_clearNotifications, &ui_img_bin_png);
-  lv_obj_set_width(ui_clearNotifications, LV_SIZE_CONTENT);
-  lv_obj_set_height(ui_clearNotifications, LV_SIZE_CONTENT);
-  lv_obj_set_align(ui_clearNotifications, LV_ALIGN_TOP_MID);
-  lv_obj_set_x(ui_clearNotifications, UI_SCALE_PX(44));
-  lv_obj_set_y(ui_clearNotifications, UI_SCALE_PX(10));
-  lv_obj_add_flag(ui_clearNotifications, LV_OBJ_FLAG_CLICKABLE);
-  lv_obj_add_flag(ui_clearNotifications, LV_OBJ_FLAG_ADV_HITTEST);
+  lv_obj_set_size(ui_clearNotifications, UI_SCALE_PX(32), UI_SCALE_PX(32));
+  lv_image_set_inner_align(ui_clearNotifications, LV_IMAGE_ALIGN_STRETCH);
+  lv_obj_set_align(ui_clearNotifications, LV_ALIGN_BOTTOM_MID);
+  lv_obj_set_y(ui_clearNotifications, -UI_SCALE_PX(14));
+  lv_obj_add_flag(ui_clearNotifications, LV_OBJ_FLAG_CLICKABLE); // whole square, not just the red pixels
   lv_obj_remove_flag(ui_clearNotifications, LV_OBJ_FLAG_SCROLLABLE);
   lv_obj_add_event_cb(ui_clearNotifications, onClearNotifications, LV_EVENT_CLICKED, NULL);
 

@@ -315,7 +315,15 @@ extern "C"
     LV_IMG_DECLARE(ui_img_wechat_png); // assets\wechat.png
     // LV_IMG_DECLARE(ui_img_857483832);      // assets\day-sky.png
     LV_IMG_DECLARE(ui_img_602206286);      // assets\dy-0.png
-    LV_IMG_DECLARE(ui_img_chrns_png);      // assets\chrns.png
+    LV_IMG_DECLARE(ui_img_navimoto_app_32); // assets/ui_img_navimoto_app_32.c (generated)
+    LV_IMG_DECLARE(ui_img_navimoto_app_64); // the same Navi Moto badge, 64 px
+/* Navi Moto badge (replaced the upstream Chronos icon) sized for single-icon spots:
+   64 px on large panels, 32 px otherwise. */
+#if UI_SCREEN_MIN_PX >= 400
+#define UI_IMG_NAVIMOTO_APP ui_img_navimoto_app_64
+#else
+#define UI_IMG_NAVIMOTO_APP ui_img_navimoto_app_32
+#endif
     LV_IMG_DECLARE(ui_img_brightness_png); // assets\brightness.png
     LV_IMG_DECLARE(ui_img_scrolling_png);  // assets\scrolling.png
     LV_IMG_DECLARE(ui_img_timeout_png);    // assets\timeout.png
