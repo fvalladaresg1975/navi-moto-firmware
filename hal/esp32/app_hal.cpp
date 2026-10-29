@@ -434,12 +434,45 @@ lv_display_rotation_t getRotation(uint8_t rotation)
     return (lv_display_rotation_t)rotation;
 }
 
+/* Power diagnostics: how much the board draws, logged once a minute by hal_loop()
+   ("[POWER]"). Drawing is most of what the CPU does, so these show at a glance whether
+   it is busy with a screen nobody sees. */
+static uint32_t powerFlushes = 0, powerFlushPx = 0, powerLvglUs = 0;
+
+/* v2.4 power saving. screenDark: the screen timed out and shows nothing. Set by the
+   timeout in hal_loop(), cleared whenever the screen is lit again - screen_on(), which
+   can run on the BLE task, or anything that sets screenTimer.active - so the panel and
+   the CPU clock are only ever switched from the main task, in screenPowerSync().
+   While dark the face is not updated, the panel sleeps and (ESPS3_1_75) the CPU runs at
+   CPU_MHZ_DARK. Waking sends SLPOUT, lets LVGL repaint the whole screen into the panel's
+   memory and turns the panel on PANEL_WAKE_MS later, so no stale frame is ever shown. */
+volatile bool screenDark = false;
+enum
+{
+  PANEL_ON,
+  PANEL_ASLEEP,
+  PANEL_WAKING
+};
+static int panelState = PANEL_ON;
+static unsigned long panelChangedMs = 0;
+#define PANEL_WAKE_MS 120 // SLPOUT -> DISPON; also the least time between SLPIN and SLPOUT
+#define CPU_MHZ_LIT 240
+#define CPU_MHZ_DARK 80   // enough for BLE and the crash detection, nothing to draw
+
 /* Display flushing */
 void my_disp_flush(lv_display_t *display, const lv_area_t *area, unsigned char *data)
 {
+  if (panelState == PANEL_ASLEEP)
+  {
+    // the panel takes no pixels while asleep; screenPowerSync() repaints all on wake
+    lv_display_flush_ready(display);
+    return;
+  }
 
   uint32_t w = lv_area_get_width(area);
   uint32_t h = lv_area_get_height(area);
+  powerFlushes++;
+  powerFlushPx += w * h;
   lv_draw_sw_rgb565_swap(data, w * h);
 
 #ifdef SW_ROTATION
@@ -546,6 +579,7 @@ void screen_on(long extra)
 {
   screenTimer.time = millis() + extra;
   screenTimer.active = true;
+  screenDark = false;
   lastActivityMs = millis();
 
 #if ESPS3_2_06
@@ -940,13 +974,55 @@ void checkLocal(bool faces)
   }
 }
 
+static int shownBrightness = -1; // last value sent to the panel, -1 = unknown
+
 void screenBrightness(uint8_t value)
 {
 
 #ifdef ELECROW_C3
   set_pin_io(2, value > 0); // ELECROW C3, no brightness control
 #else
+  // hal_loop() re-applies the brightness on every pass while the screen is on: only
+  // talk to the panel when it changes.
+  if (value == shownBrightness)
+  {
+    return;
+  }
+  shownBrightness = value;
   tft.setBrightness(value);
+#endif
+}
+
+/* See screenDark. Called at the top of every hal_loop() pass, and by the WiFi update
+   while it blocks hal_loop(). */
+void screenPowerSync(void)
+{
+#if ESPS3_1_75
+  if (screenDark && panelState == PANEL_ON)
+  {
+    tft.panelSleep();
+    panelState = PANEL_ASLEEP;
+    panelChangedMs = millis();
+    setCpuFrequencyMhz(CPU_MHZ_DARK);
+  }
+  else if (!screenDark && panelState == PANEL_ASLEEP)
+  {
+    setCpuFrequencyMhz(CPU_MHZ_LIT);
+    while (millis() - panelChangedMs < PANEL_WAKE_MS) // only on a wake right after a sleep
+    {
+      delay(5);
+    }
+    tft.panelWakeStart();
+    panelState = PANEL_WAKING;
+    panelChangedMs = millis();
+    shownBrightness = -1;
+    lv_obj_invalidate(lv_screen_active());
+  }
+  else if (panelState == PANEL_WAKING && millis() - panelChangedMs >= PANEL_WAKE_MS)
+  {
+    tft.panelWakeShow();
+    panelState = PANEL_ON;
+  }
 #endif
 }
 
@@ -1330,9 +1406,19 @@ void simonTone(int type, int pitch)
   }
 }
 
+/* 0xCD from the app: the navigation now running is its route demo ("Probar ruta en el
+   navegador"), not a ride, so trackTrip() must not store it as the last trip. Set before
+   the demo's first navigation packet, cleared after its stop - and on a disconnect, in case
+   the demo never got to say it ended. */
+static volatile bool testNavigation = false;
+
 void connectionCallback(bool state)
 {
   Timber.d(state ? "Connected" : "Disconnected");
+  if (!state)
+  {
+    testNavigation = false;
+  }
   pendingConnectionState = state;
   connectionStatePending = true;
 }
@@ -1445,6 +1531,7 @@ bool tripActive = false;
 uint32_t tripStartEpoch = 0;
 long tripLastRemainingM = -1;
 long tripDistanceM = 0;
+bool tripIsTest = false; // the app's route demo, never stored (0xCD)
 
 /* ---------------------------------------------------------------------------
    Turn-approach ring (the Beeline-style arc around the navigation screen).
@@ -1561,7 +1648,10 @@ void trackTrip(const Navigation &n)
       tripStartEpoch = (uint32_t)watch.getEpoch();
       tripDistanceM = 0;
       tripLastRemainingM = -1;
+      tripIsTest = false;
     }
+    // Any part of it being the app's demo makes the whole trip a test (see testNavigation).
+    tripIsTest = tripIsTest || testNavigation;
     long rem = parseDistanceMeters(n.distance);
     if (rem >= 0)
     {
@@ -1579,7 +1669,11 @@ void trackTrip(const Navigation &n)
     unsigned long secs = (now > tripStartEpoch) ? (now - tripStartEpoch) : 0;
     /* Ignore trips that never really started - a navigation dismissed after a few seconds
        would otherwise overwrite a real trip with noise. */
-    if (tripDistanceM > 100 && secs > 30)
+    if (tripIsTest)
+    {
+      Timber.i("Test navigation ended: %ld m in %lu s, not stored as a trip", tripDistanceM, secs);
+    }
+    else if (tripDistanceM > 100 && secs > 30)
     {
       prefs.putLong("tripdist", tripDistanceM);
       prefs.putULong("tripsecs", secs);
@@ -2451,6 +2545,12 @@ void dataCallback(uint8_t *data, int length)
      work, same rule as notifications/weather/contacts/calls. */
   otaOnPacket(data, length);   // 0xCB, navi_ota.cpp
   crashOnPacket(data, length); // 0xCC, navi_crash.cpp
+
+  /* 0xCD = test navigation. sub 0x00: [test u8], 1 while the app's route demo runs. */
+  if (length >= 7 && data[0] == 0xAB && data[4] == 0xCD && data[5] == 0x00)
+  {
+    testNavigation = data[6] != 0;
+  }
 
   if (length >= 7 && data[0] == 0xAB && data[4] == 0xC3)
   {
@@ -3417,6 +3517,8 @@ void hal_loop()
   }
 #endif
 
+  screenPowerSync();
+
   /* Heap watch. LVGL is configured with LV_USE_STDLIB_MALLOC = LV_STDLIB_CLIB, so every
      UI object (including the watch face labels rewritten every second) allocates from the
      same system heap the BLE stack needs - and only ~31 KB of it is free at boot. After
@@ -3448,6 +3550,23 @@ void hal_loop()
                   (unsigned)ESP.getMinFreeHeap(),
                   (unsigned)ESP.getFreePsram(),
                   lastResetCode, lastResetReason);
+  }
+
+  static unsigned long lastPowerLog = 0;
+  if (millis() - lastPowerLog >= 60000UL)
+  {
+    unsigned long span = millis() - lastPowerLog;
+    lastPowerLog = millis();
+    // lvgl = share of the minute spent in lv_timer_handler() (drawing included)
+    Serial.printf("[POWER] screen=%s flushes=%lu px=%lu lvgl=%lu.%lu%% cpu=%luMHz\n",
+                  screenDark ? "off" : "on",
+                  (unsigned long)powerFlushes, (unsigned long)powerFlushPx,
+                  (unsigned long)(powerLvglUs / (span * 10UL)),
+                  (unsigned long)((powerLvglUs / span) % 10UL),
+                  (unsigned long)getCpuFrequencyMhz());
+    powerFlushes = 0;
+    powerFlushPx = 0;
+    powerLvglUs = 0;
   }
 
   if (!transfer)
@@ -3662,7 +3781,9 @@ void hal_loop()
       lastControlBatteryScreen = scr;
     }
 
+    uint32_t lvglStart = micros();
     lv_timer_handler(); // Update the UI-
+    powerLvglUs += micros() - lvglStart;
     delay(5);
 
     watch.loop();
@@ -3691,17 +3812,26 @@ void hal_loop()
     if (updateSeconds)
     {
       updateSeconds = false;
-      ui_update_seconds(watch.getSecond());
+      if (!screenDark)
+      {
+        ui_update_seconds(watch.getSecond());
+      }
     }
 
-    if (ui_home == ui_clockScreen)
+    /* Nothing to draw while the screen is off (screenDark): the face is brought up to
+       date on the pass that wakes it. Before v2.4 the face kept being redrawn, unseen,
+       the whole time the screen was off. */
+    if (screenDark)
     {
-      lv_label_set_text(ui_hourLabel, watch.getHourZ().c_str());
-      lv_label_set_text(ui_dayLabel, ES_WEEKDAYS[watch.getDayofWeek()]);
-      lv_label_set_text(ui_minuteLabel, watch.getTime("%M").c_str());
+    }
+    else if (ui_home == ui_clockScreen)
+    {
+      nf_set_text(ui_hourLabel, watch.getHourZ().c_str());
+      nf_set_text(ui_dayLabel, ES_WEEKDAYS[watch.getDayofWeek()]);
+      nf_set_text(ui_minuteLabel, watch.getTime("%M").c_str());
       String dateStr = watch.getTime("%d\n") + String(ES_MONTHS_ABBR[watch.getMonth()]);
-      lv_label_set_text(ui_dateLabel, dateStr.c_str());
-      lv_label_set_text(ui_amPmLabel, watch.getAmPmC(false).c_str());
+      nf_set_text(ui_dateLabel, dateStr.c_str());
+      nf_set_text(ui_amPmLabel, watch.getAmPmC(false).c_str());
     }
     else
     {
@@ -3877,6 +4007,7 @@ void hal_loop()
 
     if (screenTimer.active)
     {
+      screenDark = false; // also lit by paths that skip screen_on() (navigation start)
       uint8_t lvl = lv_slider_get_value(ui_brightnessSlider);
       screenBrightness(lvl);
 
@@ -3896,6 +4027,7 @@ void hal_loop()
 
         screenBrightness(0);
         lv_screen_load(ui_home);
+        screenDark = true;
 
 #if ESPS3_2_06
         // Step 4: sleep the touch chip too, gated the same way as the rest of Extreme

@@ -24,7 +24,8 @@
    (for up to CRASH_SOS_KEEP_MS).
 
    Armed only once the phone has switched it on in this boot (the switch and the contacts
-   live in the app): without the phone nobody could be told.
+   live in the app): without the phone nobody could be told. While it is off the IMU is
+   powered down.
 
    Phone -> watch:
      sub 0x00 [enabled u8]   configuration, sent on every connection
@@ -85,6 +86,7 @@ enum
 
 static SensorQMI8658 qmi;
 static bool imuOk = false;
+static bool imuOn = false; // powered and sampled only while detection is on (v2.4)
 
 static volatile bool crashEnabled = false;
 static volatile bool crashTestPending = false;
@@ -163,9 +165,39 @@ void crashSetup(void)
   // keeps short impact peaks that the default 2.66 % would flatten.
   qmi.configAccelerometer(SensorQMI8658::ACC_RANGE_16G, SensorQMI8658::ACC_ODR_250Hz, SensorQMI8658::LPF_MODE_3);
   qmi.configGyroscope(SensorQMI8658::GYR_RANGE_1024DPS, SensorQMI8658::GYR_ODR_224_2Hz, SensorQMI8658::LPF_MODE_3);
-  qmi.enableAccelerometer();
-  qmi.enableGyroscope();
   Serial.printf("[CRASH] QMI8658 ready (id 0x%02X)\n", qmi.getChipID());
+  qmi.powerDown(); // until the phone turns detection on
+}
+
+/* The IMU follows the switch in the app: with detection off nothing reads it, so it is
+   powered down instead of being read 100 times a second for nothing. Turning it back on
+   starts the riding orientation from scratch. */
+static void backToIdle(void);
+
+static void imuFollowSwitch(void)
+{
+  if (!imuOk || crashEnabled == imuOn)
+    return;
+  imuOn = crashEnabled;
+  if (imuOn)
+  {
+    qmi.powerOn();
+    qmi.enableAccelerometer();
+    qmi.enableGyroscope();
+    lpX = lpY = 0;
+    lpZ = 1;
+    gyroLp = 0;
+    refOk = false;
+    refSince = 0;
+    Serial.println("[CRASH] IMU on");
+  }
+  else
+  {
+    qmi.powerDown();
+    if (state == CR_IMPACT) // sample() would have dropped it on the next reading
+      backToIdle();
+    Serial.println("[CRASH] IMU off");
+  }
 }
 
 /* ---- Screen ---- */
@@ -418,7 +450,8 @@ void crashLoop(void)
       startCountdown(true);
   }
 
-  if (imuOk && now - lastSampleMs >= CRASH_SAMPLE_MS && state != CR_COUNTDOWN && state != CR_SOS)
+  imuFollowSwitch();
+  if (imuOn && now - lastSampleMs >= CRASH_SAMPLE_MS && state != CR_COUNTDOWN && state != CR_SOS)
   {
     lastSampleMs = now;
     sample(now);

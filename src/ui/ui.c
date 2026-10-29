@@ -26,8 +26,11 @@
    2.2 (settings texts) are firmware-only and still pair with app 2.0, as does 2.3 (the
    1.75C board, WiFi updates refused when built for the other board, auto-open
    navigation on by default) goes with app 2.1: crash detection needs the phone's speed.
+   2.4 (power saving: nothing drawn with the screen off, panel asleep, 80 MHz, IMU off
+   with crash detection off; the app's route demo is not stored as a trip) goes with
+   app 2.2, which marks the demo (0xCD).
    support/build_firmware.py names the merged .bin after it. */
-#define UI_VERSION "2.3"
+#define UI_VERSION "2.4"
 
 /* Fonts don't scale with UI_SCALE_PX, so step the notification rows up on large panels -
    they were falling back to LV_FONT_DEFAULT (montserrat_14), which together with the

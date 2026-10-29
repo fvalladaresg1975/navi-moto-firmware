@@ -110,12 +110,12 @@ void update_check_nm_pixel(lv_obj_t *root, int second, int minute, int hour, boo
     snprintf(buf, sizeof(buf), "%s %d %s", NF_WEEKDAYS[d.weekday % 7], d.day, NF_MONTHS[(d.month + 11) % 12]);
     nf_set_text(dateL, buf);
 
-    lv_obj_set_style_bg_color(dot, lv_color_hex(d.connected ? NF_GREEN : NF_DARK), LV_PART_MAIN | LV_STATE_DEFAULT);
+    nf_set_bg_color(dot, lv_color_hex(d.connected ? NF_GREEN : NF_DARK));
 
     if (d.weatherKnown)
     {
         snprintf(buf, sizeof(buf), "%d°", d.temp);
-        setWeatherIcon(wxIcon, d.icon, d.hour > 7 && d.hour < 21);
+        nf_set_weather_icon(wxIcon, d.icon, d.hour > 7 && d.hour < 21);
     }
     else
         snprintf(buf, sizeof(buf), "--");

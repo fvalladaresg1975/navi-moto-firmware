@@ -96,7 +96,7 @@ void update_check_nm_clima(lv_obj_t *root, int second, int minute, int hour, boo
     if (d.weatherKnown)
     {
         snprintf(buf, sizeof(buf), "%d", d.temp);
-        setWeatherIcon(wxIcon, d.icon, d.hour > 7 && d.hour < 21);
+        nf_set_weather_icon(wxIcon, d.icon, d.hour > 7 && d.hour < 21);
     }
     else
         snprintf(buf, sizeof(buf), "--");
@@ -120,8 +120,8 @@ void update_check_nm_clima(lv_obj_t *root, int second, int minute, int hour, boo
             snprintf(buf, sizeof(buf), "--");
         nf_set_text(hRain[i], buf);
         uint32_t c = r >= 0 ? rain_color(r) : NF_DARK;
-        lv_obj_set_style_text_color(hRain[i], lv_color_hex(c), LV_PART_MAIN | LV_STATE_DEFAULT);
-        lv_obj_set_style_bg_color(hDot[i], lv_color_hex(c), LV_PART_MAIN | LV_STATE_DEFAULT);
+        nf_set_text_color(hRain[i], lv_color_hex(c));
+        nf_set_bg_color(hDot[i], lv_color_hex(c));
         if (rainFrom < 0 && r >= 50)
             rainFrom = i;
     }
@@ -133,7 +133,7 @@ void update_check_nm_clima(lv_obj_t *root, int second, int minute, int hour, boo
     else
         snprintf(buf, sizeof(buf), "Lluvia desde las %d h", d.hourHour[rainFrom]);
     nf_set_text(rainL, buf);
-    lv_obj_set_style_text_color(rainL, lv_color_hex(rainFrom >= 0 ? NF_CYAN : NF_GREY), LV_PART_MAIN | LV_STATE_DEFAULT);
+    nf_set_text_color(rainL, lv_color_hex(rainFrom >= 0 ? NF_CYAN : NF_GREY));
 
     if (d.windKmh >= 0)
         snprintf(buf, sizeof(buf), "Viento %d km/h", d.windKmh);

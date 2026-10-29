@@ -16,6 +16,7 @@ class DisplayWrapper
 {
 public:
     Arduino_GFX *gfx;
+    Arduino_DataBus *bus;
 
 #ifdef ESPS3_2_06
     TouchDrvFT6X36 touch;
@@ -26,7 +27,7 @@ public:
     DisplayWrapper()
     {
 
-        static Arduino_DataBus *bus = new Arduino_ESP32QSPI(
+        bus = new Arduino_ESP32QSPI(
             LCD_CS /* CS */, LCD_SCK /* SCK */, LCD_SD0 /* SDIO0 */, LCD_SD1 /* SDIO1 */,
             LCD_SD2 /* SDIO2 */, LCD_SD3 /* SDIO3 */);
 
@@ -103,6 +104,28 @@ public:
     void setBrightness(uint8_t brightness)
     {
         ((Arduino_CO5300 *)gfx)->setBrightness(brightness);
+    }
+
+    /* Panel sleep, split so the caller never blocks on it: the library's displayOff() /
+       displayOn() wait 240 ms each. The panel keeps its memory while asleep, but nothing
+       may be written to it (the caller skips flushes); after panelWakeStart() it can take
+       a new frame, and panelWakeShow() - at least 120 ms later - shows it. */
+    void panelSleep(void)
+    {
+        bus->sendCommand(CO5300_C_DISPOFF);
+        delay(20);
+        bus->sendCommand(CO5300_C_SLPIN);
+    }
+
+    void panelWakeStart(void)
+    {
+        bus->sendCommand(CO5300_C_SLPOUT);
+        delay(10);
+    }
+
+    void panelWakeShow(void)
+    {
+        bus->sendCommand(CO5300_C_DISPON);
     }
 
     void writePixel(int32_t x, int32_t y, const uint16_t color)

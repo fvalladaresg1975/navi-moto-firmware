@@ -41,6 +41,7 @@ extern ChronosESP32 watch;
 extern Preferences prefs;
 void screenBrightness(uint8_t value);
 void screen_on(long extra);
+void screenPowerSync(void); // wakes the panel (and the CPU clock) after screen_on()
 int halBatteryPercent(void);  // app_hal.cpp; -1 = unknown
 bool halExternalPower(void);  // charger / USB plugged in
 
@@ -263,6 +264,7 @@ static void otaUiClose(void)
 static void otaUiPump(void)
 {
   screen_on(0);
+  screenPowerSync();
   screenBrightness(lv_slider_get_value(ui_brightnessSlider));
   lv_timer_handler();
 }

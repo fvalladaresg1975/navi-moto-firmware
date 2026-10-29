@@ -14,6 +14,7 @@ Firmware de **Navi Moto**: una pantalla redonda **Waveshare ESP32-S3 Touch AMOLE
 - **Actualización de firmware por WiFi** desde la app, sin cable: la placa abre su propia red, recibe el .bin en el espacio de firmware libre y solo lo da por bueno cuando vuelve a conectarse al celular; si falla, vuelve sola a la versión anterior.
 - **Detección de caídas** con el acelerómetro/giroscopio QMI8658: golpe fuerte + moto tumbada, solo si la moto venía a más de 20 km/h según el GPS del celular (sacar la placa del anclaje estacionado no la dispara) → cuenta regresiva de 30 s con «Estoy bien»; si nadie la cancela, la app envía un SMS con la ubicación a los contactos de emergencia.
 - **Batería de la placa y del teléfono** en el panel de control (deslizar hacia abajo).
+- **Ahorro de energía** con la pantalla apagada: no se dibuja nada, el panel AMOLED duerme y el procesador baja a 80 MHz; el sensor de caídas se apaga si la detección está desactivada. El puerto serie muestra una línea `[POWER]` por minuto con cuánto se dibujó.
 - **Clima**, calendario, cronómetro, estadísticas del último viaje.
 - Interfaz en español, pantalla de inicio con la moto, reloj RTC y batería (PMU AXP2101).
 
@@ -49,6 +50,7 @@ Sobre el protocolo BLE de la librería [ChronosESP32](https://github.com/fbiego/
 | `0xCA` | ambos | foto de la esfera «Foto»: la app envía el JPEG (inicio, datos, fin, quitar); la placa responde el resultado |
 | `0xCB` | ambos | actualización por WiFi: la app pide abrir la red de la placa (SSID + clave) o cancelar; la placa responde lista / error / actualizada / volvió atrás. El firmware viaja por TCP (puerto 3232) con su MD5; un .bin de otra placa se rechaza |
 | `0xCC` | ambos | detección de caídas: la app la activa, pide una prueba, cancela, informa a cuántos contactos llegó el SMS o envía la velocidad del GPS; la placa avisa cuenta regresiva / cancelada / pedir el SOS |
+| `0xCD` | app → placa | la navegación en curso es la ruta de prueba de la app: no se guarda como último viaje |
 
 La batería del teléfono usa el comando propio de la librería (`0x91`).
 

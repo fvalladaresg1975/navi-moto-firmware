@@ -60,6 +60,56 @@ void nf_set_text(lv_obj_t *label, const char *text)
     lv_label_set_text(label, text);
 }
 
+void nf_set_bg_color(lv_obj_t *obj, lv_color_t c)
+{
+    if (obj && !lv_color_eq(lv_obj_get_style_bg_color(obj, LV_PART_MAIN), c))
+        lv_obj_set_style_bg_color(obj, c, LV_PART_MAIN | LV_STATE_DEFAULT);
+}
+
+void nf_set_text_color(lv_obj_t *obj, lv_color_t c)
+{
+    if (obj && !lv_color_eq(lv_obj_get_style_text_color(obj, LV_PART_MAIN), c))
+        lv_obj_set_style_text_color(obj, c, LV_PART_MAIN | LV_STATE_DEFAULT);
+}
+
+void nf_set_border_color(lv_obj_t *obj, lv_color_t c)
+{
+    if (obj && !lv_color_eq(lv_obj_get_style_border_color(obj, LV_PART_MAIN), c))
+        lv_obj_set_style_border_color(obj, c, LV_PART_MAIN | LV_STATE_DEFAULT);
+}
+
+void setWeatherIcon(lv_obj_t *obj, int id, bool day); // ui.c
+
+void nf_set_weather_icon(lv_obj_t *img, int id, bool day)
+{
+    static lv_obj_t *lastImg[8];
+    static int lastKey[8];
+    if (!img)
+        return;
+    /* lv_image_set_src() invalidates even for the same source, so remember what each
+       icon shows (a handful of icons across the faces). */
+    int key = id * 2 + (day ? 1 : 0);
+    int slot = -1;
+    for (int i = 0; i < 8; i++)
+    {
+        if (lastImg[i] == img)
+        {
+            if (lastKey[i] == key)
+                return;
+            slot = i;
+            break;
+        }
+        if (slot < 0 && lastImg[i] == NULL)
+            slot = i;
+    }
+    if (slot >= 0)
+    {
+        lastImg[slot] = img;
+        lastKey[slot] = key;
+    }
+    setWeatherIcon(img, id, day);
+}
+
 lv_color_t nf_battery_color(int pct, bool charging)
 {
     if (charging)
@@ -107,7 +157,9 @@ void nf_arc_battery(lv_obj_t *arc, int pct, bool charging)
     int p = pct < 0 ? 0 : (pct > 100 ? 100 : pct);
     if (lv_arc_get_value(arc) != p)
         lv_arc_set_value(arc, p);
-    lv_obj_set_style_arc_color(arc, nf_battery_color(p, charging), LV_PART_INDICATOR | LV_STATE_DEFAULT);
+    lv_color_t c = nf_battery_color(p, charging);
+    if (!lv_color_eq(lv_obj_get_style_arc_color(arc, LV_PART_INDICATOR), c))
+        lv_obj_set_style_arc_color(arc, c, LV_PART_INDICATOR | LV_STATE_DEFAULT);
 }
 
 void nf_format_km(char *buf, int len, long meters)

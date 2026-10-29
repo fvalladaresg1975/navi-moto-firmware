@@ -164,18 +164,18 @@ void update_check_nm_tablero(lv_obj_t *root, int second, int minute, int hour, b
     }
 
     uint32_t bt = d.connected ? NF_GREEN : NF_DARK;
-    lv_obj_set_style_border_color(btBox, lv_color_hex(bt), LV_PART_MAIN | LV_STATE_DEFAULT);
-    lv_obj_set_style_text_color(btL, lv_color_hex(bt), LV_PART_MAIN | LV_STATE_DEFAULT);
+    nf_set_border_color(btBox, lv_color_hex(bt));
+    nf_set_text_color(btL, lv_color_hex(bt));
 
     int seg = d.boardPct < 0 ? 0 : (d.boardPct + 19) / 20; // 1-20 % -> 1 segment ... 81-100 % -> 5
     lv_color_t fc = nf_battery_color(d.boardPct, d.boardCharging);
     for (int k = 0; k < 5; k++)
-        lv_obj_set_style_bg_color(fuel[k], k < seg ? fc : lv_color_hex(NF_DARK), LV_PART_MAIN | LV_STATE_DEFAULT);
+        nf_set_bg_color(fuel[k], k < seg ? fc : lv_color_hex(NF_DARK));
 
     if (d.weatherKnown)
     {
         snprintf(buf, sizeof(buf), "%d°C", d.temp);
-        setWeatherIcon(wxIcon, d.icon, d.hour > 7 && d.hour < 21);
+        nf_set_weather_icon(wxIcon, d.icon, d.hour > 7 && d.hour < 21);
     }
     else
         snprintf(buf, sizeof(buf), "--");

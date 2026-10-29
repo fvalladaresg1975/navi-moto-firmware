@@ -94,6 +94,14 @@ extern "C"
     lv_obj_t *nf_label(lv_obj_t *parent, const lv_font_t *font, uint32_t color, int x, int y, const char *text);
     /* lv_label_set_text only when the text changes (no redraw otherwise). */
     void nf_set_text(lv_obj_t *label, const char *text);
+    /* The same for colours and the weather icon. Every style write invalidates the object
+       even when the value is unchanged, and the faces are updated on every pass of
+       hal_loop(): with plain setters the face was redrawn ~30 times a second for nothing,
+       screen off included. */
+    void nf_set_bg_color(lv_obj_t *obj, lv_color_t c);
+    void nf_set_text_color(lv_obj_t *obj, lv_color_t c);
+    void nf_set_border_color(lv_obj_t *obj, lv_color_t c);
+    void nf_set_weather_icon(lv_obj_t *img, int id, bool day);
     /* A thin edge arc, value 0-100. side 0 = left half (board), 1 = right half (phone),
        both filling bottom-up, like the control panel. */
     lv_obj_t *nf_edge_arc(lv_obj_t *parent, int side, int width, int inset);

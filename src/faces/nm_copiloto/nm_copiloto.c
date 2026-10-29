@@ -61,10 +61,10 @@ void update_check_nm_copiloto(lv_obj_t *root, int second, int minute, int hour, 
     else
         snprintf(buf, sizeof(buf), d.connected ? LV_SYMBOL_BLUETOOTH " Conectado" : "Sin conexión");
     nf_set_text(statusL, buf);
-    lv_obj_set_style_text_color(statusL, lv_color_hex(d.connected ? NF_GREEN : NF_GREY), LV_PART_MAIN | LV_STATE_DEFAULT);
+    nf_set_text_color(statusL, lv_color_hex(d.connected ? NF_GREEN : NF_GREY));
     if (d.weatherKnown)
     {
-        setWeatherIcon(wxIcon, d.icon, d.hour > 7 && d.hour < 21);
+        nf_set_weather_icon(wxIcon, d.icon, d.hour > 7 && d.hour < 21);
         lv_obj_remove_flag(wxIcon, LV_OBJ_FLAG_HIDDEN);
         lv_obj_align_to(wxIcon, statusL, LV_ALIGN_OUT_RIGHT_MID, 4, 0);
     }
