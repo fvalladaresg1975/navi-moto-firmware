@@ -30,6 +30,13 @@
 // To change how big the arrow is, change these two only - everything else derives from
 // them. Keep them equal to preserve the aspect ratio. The band 70..166px is reserved for
 // it in the screen layout below; going past 96 needs the distance label moved down too.
+// What navigateInfo() last asked for. The screen is only built the first time it is opened,
+// and every update before that used to be dropped, so it opened on the upstream template's
+// placeholders ("Disponible en v3.7.5+", "Solo ESP32"). Built from these instead.
+static char navLastText[96] = "Navegación · Desconectado";
+static char navLastTitle[64] = "Navi Moto";
+static char navLastDirections[192] = "Inicia la navegación en Google Maps";
+
 #define NAV_ICON_SRC 48 // protocol-fixed source size, do not change
 #define CANVAS_WIDTH 96
 #define CANVAS_HEIGHT 96
@@ -110,6 +117,9 @@ static lv_obj_t *ui_routeRemainNum;
 static lv_obj_t *ui_routeRemainUnit;
 static lv_point_precise_t routePts[ROUTE_MAX_POINTS];
 static bool routeMode = false;
+/* Google Maps navigation running (navSetActive). With neither it nor route mode there is
+   nothing to end, so swipe-left just leaves the screen. */
+static bool mapsNavActive = false;
 
 /* ---- Street layer (0xC7) -----------------------------------------------------------
    OpenStreetMap streets around the route, drawn faint under the route line. Unlike the
@@ -411,9 +421,19 @@ void ui_event_navScreen(lv_event_t *e)
         // Swipe right-to-left reveals the exit confirmation. A gesture rather than an
         // always-visible button: a button had to live in the narrow bottom of the circle
         // and covered the info line there. Left = leave, mirroring right = back.
+        // With no navigation running there is nothing to end: the confirmation used to
+        // come up anyway and "Salir" got the phone's "no hay una navegación de Google Maps"
+        // toast, while the screen stayed. Then it leaves the screen, like swipe-right.
         if (dir == LV_DIR_LEFT)
         {
-            showNavExitLayer();
+            if (mapsNavActive || routeMode)
+            {
+                showNavExitLayer();
+            }
+            else if (!exitShown)
+            {
+                ui_app_exit();
+            }
         }
         // Swipe down pulls in the control panel (music, volume), same gesture as on the
         // watch face. The panel is told to come back HERE on swipe-up rather than to the
@@ -637,7 +657,7 @@ void ui_navScreen_screen_init()
     lv_obj_set_x(ui_navDistance, NAV_DIST_X);
     lv_obj_set_y(ui_navDistance, NAV_DIST_Y);
     lv_obj_set_align(ui_navDistance, LV_ALIGN_TOP_MID);
-    lv_label_set_text(ui_navDistance, "Navi Moto");
+    lv_label_set_text(ui_navDistance, navLastTitle);
     lv_obj_set_style_text_font(ui_navDistance, &lv_font_montserrat_30, LV_PART_MAIN | LV_STATE_DEFAULT);
     lv_obj_set_style_transform_pivot_x(ui_navDistance, LV_PCT(50), LV_PART_MAIN | LV_STATE_DEFAULT);
     lv_obj_set_style_transform_pivot_y(ui_navDistance, LV_PCT(50), LV_PART_MAIN | LV_STATE_DEFAULT);
@@ -655,7 +675,7 @@ void ui_navScreen_screen_init()
     lv_obj_set_y(ui_navDirection, UI_SCALE_PX(140));
     lv_obj_set_align(ui_navDirection, LV_ALIGN_TOP_MID);
     lv_label_set_long_mode(ui_navDirection, LV_LABEL_LONG_DOT);
-    lv_label_set_text(ui_navDirection, "Disponible en v3.7.5+");
+    lv_label_set_text(ui_navDirection, navLastDirections);
     lv_obj_set_style_text_align(ui_navDirection, LV_TEXT_ALIGN_CENTER, LV_PART_MAIN | LV_STATE_DEFAULT);
     lv_obj_set_style_text_font(ui_navDirection, &lv_font_montserrat_20, LV_PART_MAIN | LV_STATE_DEFAULT);
     lv_obj_set_style_transform_pivot_x(ui_navDirection, LV_PCT(50), LV_PART_MAIN | LV_STATE_DEFAULT);
@@ -671,7 +691,7 @@ void ui_navScreen_screen_init()
     lv_obj_set_x(ui_navText, 0);
     lv_obj_set_y(ui_navText, UI_SCALE_PX(184));
     lv_obj_set_align(ui_navText, LV_ALIGN_TOP_MID);
-    lv_label_set_text(ui_navText, "Navegación · Solo ESP32");
+    lv_label_set_text(ui_navText, navLastText);
     lv_obj_set_style_text_align(ui_navText, LV_TEXT_ALIGN_CENTER, LV_PART_MAIN | LV_STATE_DEFAULT);
     lv_obj_set_style_text_font(ui_navText, &lv_font_montserrat_20, LV_PART_MAIN | LV_STATE_DEFAULT);
     lv_obj_set_style_text_color(ui_navText, lv_color_hex(0xB4B2A9), LV_PART_MAIN | LV_STATE_DEFAULT);
@@ -789,6 +809,9 @@ void ui_navScreen_screen_init()
 void navigateInfo(const char *text, const char *title, const char *directions)
 {
 #ifdef ENABLE_APP_NAVIGATION
+    snprintf(navLastText, sizeof(navLastText), "%s", text);
+    snprintf(navLastTitle, sizeof(navLastTitle), "%s", title);
+    snprintf(navLastDirections, sizeof(navLastDirections), "%s", directions);
     if (!ui_navScreen){
         return;
     }
@@ -839,6 +862,17 @@ void navIconState(bool show)
         {
             lv_obj_remove_flag(ui_navIcon, LV_OBJ_FLAG_HIDDEN);
         }
+    }
+#endif
+}
+
+void navSetActive(bool active)
+{
+#ifdef ENABLE_APP_NAVIGATION
+    mapsNavActive = active;
+    if (!active && !routeMode && ui_navExitLayer)
+    {
+        hideNavExitLayer(); // navigation ended meanwhile: nothing left to confirm
     }
 #endif
 }

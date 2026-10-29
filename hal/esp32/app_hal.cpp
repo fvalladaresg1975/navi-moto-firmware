@@ -3770,6 +3770,7 @@ void hal_loop()
 #ifdef ENABLE_APP_NAVIGATION
       bool navStarting = nav.active && !navWasActive;
       navWasActive = nav.active;
+      navSetActive(nav.active);
       if (actScr != get_nav_screen() && actScr != ui_callScreen && navStarting && navSwitch)
       {
         lastActScr = actScr;

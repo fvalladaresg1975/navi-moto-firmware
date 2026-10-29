@@ -21,10 +21,11 @@
 
 #include "../../hal/esp32/displays/pins.h"
 
-/* Navi Moto's own version, released together with the phone app of the same number (2.0:
-   WiFi update + crash detection). It was upstream's "6.3", which said nothing about this
-   firmware. support/build_firmware.py names the merged .bin after it. */
-#define UI_VERSION "2.0"
+/* Navi Moto's own version (it was upstream's "6.3", which said nothing about this firmware).
+   2.0 came with app 2.0 (WiFi update + crash detection); 2.1 is firmware-only (navigation
+   screen fixes) and still pairs with app 2.0. support/build_firmware.py names the merged
+   .bin after it. */
+#define UI_VERSION "2.1"
 
 /* Fonts don't scale with UI_SCALE_PX, so step the notification rows up on large panels -
    they were falling back to LV_FONT_DEFAULT (montserrat_14), which together with the

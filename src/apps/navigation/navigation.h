@@ -37,6 +37,7 @@ void ui_app_exit(void);
 
     void navigateInfo(const char* text, const char* title, const char *directions);
     void navIconState(bool show);
+    void navSetActive(bool active); // Google Maps navigation running (decides what swipe-left does)
     void setNavIconPx(uint16_t x, uint16_t y, bool on);
     void navIconRefresh(void);
     void navTurnProgress(int percent);
