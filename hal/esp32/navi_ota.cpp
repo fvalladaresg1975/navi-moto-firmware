@@ -8,6 +8,7 @@
    and listens on OTA_PORT. The phone joins it and sends, big-endian,
      "NMOT" [size u32][MD5 of the image, 16 bytes] and then the image,
    and the board answers one byte (OTA_TCP_*). On success it restarts into the new image.
+   An image built for the other board (its "NAVIMOTO-HW" tag) is refused mid-transfer.
    Watch -> phone {AB 00 04 FF CB 80 status}: OTA_* below.
 
    Why it can't leave the board unusable:
@@ -69,7 +70,8 @@ enum
   OTA_TCP_NO_SPACE = 2, // bigger than the slot, or the slot couldn't be prepared
   OTA_TCP_WRITE = 3,    // flash write failed
   OTA_TCP_VERIFY = 4,   // MD5 or image check failed
-  OTA_TCP_STALLED = 5   // the phone stopped sending / disconnected / cancelled
+  OTA_TCP_STALLED = 5,  // the phone stopped sending / disconnected / cancelled
+  OTA_TCP_WRONG_BOARD = 6 // built for the other board (otaWrongBoard says which)
 };
 
 static char otaSsid[33];
@@ -79,6 +81,7 @@ static volatile bool otaCancelPending = false;
 static volatile bool otaBusy = false;
 static volatile bool otaWaiting = false; // access point up, phone not connected yet
 
+static char otaWrongBoard[16]; // board an image was built for, when it isn't this one
 static uint8_t otaBootResult = 0; // OTA_UPDATED / OTA_ROLLED_BACK, reported once connected
 static bool otaValid = false;
 static unsigned long otaConnectedSince = 0;
@@ -86,13 +89,58 @@ static unsigned long otaMessageUntil = 0;
 
 extern "C" bool verifyRollbackLater() { return true; }
 
-/* "NAVIMOTO-FW ota1 <date>", hal/esp32/navi_build.c - generated on every build. */
+/* "NAVIMOTO-FW ota1 <date>" and "NAVIMOTO-HW <board>", hal/esp32/navi_build.c - generated
+   on every build. */
 extern "C" const char navi_build_stamp[];
+extern "C" const char navi_board_tag[];
+#define OTA_TAG_PREFIX_LEN 12 // "NAVIMOTO-HW "
+/* Images from before the board tag (up to v2.2) were all built for the 1.75. */
+#define OTA_UNTAGGED_BOARD "1.75"
 
 const char *otaBuildDate(void)
 {
   return navi_build_stamp + sizeof("NAVIMOTO-FW ota1 ") - 1;
 }
+
+const char *otaBoardName(void)
+{
+  return navi_board_tag + OTA_TAG_PREFIX_LEN;
+}
+
+/* Finds the board tag in the image as it streams in. The prefix is read from
+   navi_board_tag itself, so no second copy of it ends up in the image to be found. */
+struct OtaTagScan
+{
+  int matched = 0;  // prefix bytes matched so far
+  int len = -1;     // >= 0: copying the board name
+  bool done = false;
+  char board[16];
+
+  void feed(const uint8_t *p, size_t n)
+  {
+    for (size_t i = 0; i < n && !done; i++)
+    {
+      char c = (char)p[i];
+      if (len >= 0)
+      {
+        if (c == 0 || len == (int)sizeof(board) - 1)
+        {
+          board[len] = 0;
+          done = true;
+        }
+        else
+          board[len++] = c;
+      }
+      else if (c == navi_board_tag[matched])
+      {
+        if (++matched == OTA_TAG_PREFIX_LEN)
+          len = 0;
+      }
+      else
+        matched = c == navi_board_tag[0] ? 1 : 0; // 'N' only starts the prefix
+    }
+  }
+};
 
 static void otaReport(uint8_t status)
 {
@@ -271,8 +319,15 @@ static uint8_t otaReceive(WiFiClient &c)
   uint32_t got = 0;
   unsigned long last = millis(), lastUi = 0;
   int shown = -1;
+  OtaTagScan tag;
   while (got < size)
   {
+    if (tag.done && strcmp(tag.board, otaBoardName()) != 0)
+    {
+      strlcpy(otaWrongBoard, tag.board, sizeof(otaWrongBoard));
+      Update.abort();
+      return OTA_TCP_WRONG_BOARD;
+    }
     int a = c.available();
     if (a > 0)
     {
@@ -289,6 +344,7 @@ static uint8_t otaReceive(WiFiClient &c)
           Update.abort();
           return OTA_TCP_WRITE;
         }
+        tag.feed(buf, r);
         got += r;
         last = millis();
       }
@@ -313,6 +369,13 @@ static uint8_t otaReceive(WiFiClient &c)
       }
       otaUiPump();
     }
+  }
+  const char *board = tag.done ? tag.board : OTA_UNTAGGED_BOARD;
+  if (strcmp(board, otaBoardName()) != 0)
+  {
+    strlcpy(otaWrongBoard, board, sizeof(otaWrongBoard));
+    Update.abort();
+    return OTA_TCP_WRONG_BOARD;
   }
   otaUiProgress(100);
   otaUiPump();
@@ -428,10 +491,14 @@ static void otaSession(void)
       ESP.restart();
     }
     fail = OTA_ERR_FAILED;
-    const char *why = r == OTA_TCP_VERIFY  ? "El archivo llegó dañado o no es un firmware válido."
-                      : r == OTA_TCP_NO_SPACE ? "El firmware no cabe en la placa."
-                      : r == OTA_TCP_WRITE    ? "Error al escribir en la memoria."
-                                              : "Se cortó la transferencia.";
+    char wrong[96];
+    snprintf(wrong, sizeof(wrong), "Ese firmware es para la placa %s; esta es una %s.", otaWrongBoard,
+             otaBoardName());
+    const char *why = r == OTA_TCP_VERIFY        ? "El archivo llegó dañado o no es un firmware válido."
+                      : r == OTA_TCP_NO_SPACE    ? "El firmware no cabe en la placa."
+                      : r == OTA_TCP_WRITE       ? "Error al escribir en la memoria."
+                      : r == OTA_TCP_WRONG_BOARD ? wrong
+                                                 : "Se cortó la transferencia.";
     otaUiOpen("Actualización", why, false);
   }
   else

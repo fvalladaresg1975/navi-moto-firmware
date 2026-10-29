@@ -248,12 +248,19 @@
 #define LCD_SD1 5
 #define LCD_SD2 6
 #define LCD_SD3 7
-#define LCD_RST 39
 
 #define TOUCH_SDA 15
 #define TOUCH_SCL 14
-#define TOUCH_RST 40
 #define TOUCH_IRQ 11
+
+// The 1.75C moved both resets (Waveshare's pin_config.h for each board).
+#if ESPS3_1_75C
+#define LCD_RST 1
+#define TOUCH_RST 2
+#else
+#define LCD_RST 39
+#define TOUCH_RST 40
+#endif
 
 
 #define MAX_FILE_OPEN 10

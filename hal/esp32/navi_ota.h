@@ -10,5 +10,6 @@ void otaBoot(void);                                  // hal_setup, right after p
 void otaLoop(void);                                  // hal_loop, LVGL task
 void otaOnPacket(const uint8_t *data, int length);   // dataCallback, NimBLE task
 const char *otaBuildDate(void);                      // "2026-10-28 15:20", for "Acerca de"
+const char *otaBoardName(void);                      // "1.75" / "1.75C", for "Acerca de"
 
 #endif

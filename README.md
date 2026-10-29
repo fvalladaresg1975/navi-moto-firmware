@@ -12,18 +12,25 @@ Firmware de **Navi Moto**: una pantalla redonda **Waveshare ESP32-S3 Touch AMOLE
 - **Notificaciones, llamadas** (contestar / rechazar) y **contactos** (llamar desde la placa).
 - **Esferas propias para moto** (dibujadas con LVGL, sin imágenes): *Pixel Moto* (clima, viento, baterías, último viaje), *Tablero* (la hora como tacómetro, batería como medidor de bencina, testigo BT), *Clima de ruta* (próximas 5 horas con probabilidad de lluvia, viento, atardecer), *Copiloto* (hora gigante, alto contraste) y *Foto* (una foto tuya de fondo, elegida y ajustada en la app con «Esfera con foto»).
 - **Actualización de firmware por WiFi** desde la app, sin cable: la placa abre su propia red, recibe el .bin en el espacio de firmware libre y solo lo da por bueno cuando vuelve a conectarse al celular; si falla, vuelve sola a la versión anterior.
-- **Detección de caídas** con el acelerómetro/giroscopio QMI8658: golpe fuerte + moto tumbada → cuenta regresiva de 30 s con «Estoy bien»; si nadie la cancela, la app envía un SMS con la ubicación a los contactos de emergencia.
+- **Detección de caídas** con el acelerómetro/giroscopio QMI8658: golpe fuerte + moto tumbada, solo si la moto venía a más de 20 km/h según el GPS del celular (sacar la placa del anclaje estacionado no la dispara) → cuenta regresiva de 30 s con «Estoy bien»; si nadie la cancela, la app envía un SMS con la ubicación a los contactos de emergencia.
 - **Batería de la placa y del teléfono** en el panel de control (deslizar hacia abajo).
 - **Clima**, calendario, cronómetro, estadísticas del último viaje.
 - Interfaz en español, pantalla de inicio con la moto, reloj RTC y batería (PMU AXP2101).
 
 ## Compilar y grabar
 
-Con [PlatformIO](https://platformio.org/), entorno `lolin_s3_1_75`:
+Con [PlatformIO](https://platformio.org/), según la placa:
+
+| Placa | Entorno |
+|---|---|
+| ESP32-S3-Touch-AMOLED-1.75 | `lolin_s3_1_75` |
+| ESP32-S3-Touch-AMOLED-1.75C (32 MB, sin RTC ni SD; reset de pantalla y táctil en GPIO1 / GPIO2) | `lolin_s3_1_75c` |
 
 ```bash
 pio run -e lolin_s3_1_75 -t upload
 ```
+
+Cada firmware lleva grabada su placa («Acerca de» la muestra) y rechaza por WiFi un .bin hecho para la otra. En la 1.75C, sin RTC, la hora se toma del celular al conectarse.
 
 ## Protocolo con la app
 
@@ -40,8 +47,8 @@ Sobre el protocolo BLE de la librería [ChronosESP32](https://github.com/fbiego/
 | `0xC8` | ambos | brillo de la pantalla: la app lo fija o lo pide; la placa avisa el nivel actual |
 | `0xC9` | app → placa | clima extra para las esferas: probabilidad de lluvia por hora, salida y puesta del sol |
 | `0xCA` | ambos | foto de la esfera «Foto»: la app envía el JPEG (inicio, datos, fin, quitar); la placa responde el resultado |
-| `0xCB` | ambos | actualización por WiFi: la app pide abrir la red de la placa (SSID + clave) o cancelar; la placa responde lista / error / actualizada / volvió atrás. El firmware viaja por TCP (puerto 3232) con su MD5 |
-| `0xCC` | ambos | detección de caídas: la app la activa, pide una prueba, cancela o informa a cuántos contactos llegó el SMS; la placa avisa cuenta regresiva / cancelada / pedir el SOS |
+| `0xCB` | ambos | actualización por WiFi: la app pide abrir la red de la placa (SSID + clave) o cancelar; la placa responde lista / error / actualizada / volvió atrás. El firmware viaja por TCP (puerto 3232) con su MD5; un .bin de otra placa se rechaza |
+| `0xCC` | ambos | detección de caídas: la app la activa, pide una prueba, cancela, informa a cuántos contactos llegó el SMS o envía la velocidad del GPS; la placa avisa cuenta regresiva / cancelada / pedir el SOS |
 
 La batería del teléfono usa el comando propio de la librería (`0x91`).
 

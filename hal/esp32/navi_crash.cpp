@@ -12,6 +12,12 @@
    average of the direction of gravity (CRASH_REF_TAU_MS), frozen at the impact: it
    follows the mount angle and the small movements of the bars.
 
+   An impact only counts if the bike was moving: the phone sends its GPS speed (sub 0x04)
+   and the board needs CRASH_MOVING_KMH or more within CRASH_MOVING_MS before the impact.
+   Taking the board off its mount when parking looks exactly like a crash to the IMU (a
+   jerk, then lying still at another angle) - on 2026-10-29 that sent a real SOS. Without
+   speed from the phone (no GPS fix, old app) nothing is detected.
+
    Then a CRASH_COUNTDOWN_S countdown on a full-screen panel with a big "Estoy bien"
    button; the phone is told at the start (it sounds an alarm and can cancel too). At zero
    the board asks the phone to send the SOS, or as soon as the link is back if it is down
@@ -25,6 +31,7 @@
      sub 0x01                test: a short countdown, marked as a test
      sub 0x02                cancel (the "Estoy bien" on the phone's alarm)
      sub 0x03 [sent u8]      SOS result: how many contacts got the SMS (0 = none)
+     sub 0x04 [km/h u8]      GPS speed, every few seconds while armed (255 = 255 or more)
    Watch -> phone {AB 00 04 FF CC 80 lo}:
      0 cancelled, 1 send the SOS, 2 countdown started, 3 send the test message,
      4 test countdown started
@@ -56,6 +63,8 @@ void screen_on(long extra);
 #define CRASH_TEST_COUNTDOWN_S 10
 #define CRASH_SOS_KEEP_MS 600000UL // a pending SOS is still worth sending this long
 #define CRASH_ANSWER_MS 60000UL    // the phone answers the SOS within this (location + SMS)
+#define CRASH_MOVING_KMH 20        // GPS speed that means riding, not walking the board around
+#define CRASH_MOVING_MS 60000UL    // an impact counts if the bike was that fast this recently
 
 enum
 {
@@ -81,6 +90,8 @@ static volatile bool crashEnabled = false;
 static volatile bool crashTestPending = false;
 static volatile bool crashCancelPending = false;
 static volatile int crashResult = -1; // SOS answer from the phone, -1 = none yet
+static volatile bool movingSeen = false;
+static volatile unsigned long movingAt = 0; // last time the phone said CRASH_MOVING_KMH or more
 
 static int state = CR_IDLE;
 static bool isTest = false;
@@ -95,7 +106,7 @@ static int countdownS = CRASH_COUNTDOWN_S;
 static int shownLeft = -1;
 static unsigned long sosAt = 0, sosSentAt = 0;
 static bool sosSent = false, sosAnswered = false, wasConnected = false, offlineShown = false;
-static unsigned long lastSpikeLog = 0;
+static unsigned long lastSpikeLog = 0, lastIgnoredLog = 0;
 
 static void tell(uint8_t lo)
 {
@@ -124,7 +135,19 @@ void crashOnPacket(const uint8_t *data, int length)
     if (n >= 1)
       crashResult = data[6];
     break;
+  case 0x04:
+    if (n >= 1 && data[6] >= CRASH_MOVING_KMH)
+    {
+      movingAt = millis();
+      movingSeen = true;
+    }
+    break;
   }
+}
+
+static bool wasMoving(unsigned long now)
+{
+  return movingSeen && now - movingAt < CRASH_MOVING_MS;
 }
 
 void crashSetup(void)
@@ -328,10 +351,18 @@ static void sample(unsigned long now)
     }
     if (impact && crashEnabled)
     {
-      state = CR_IMPACT;
-      impactAt = now;
-      downSince = 0;
-      Serial.printf("[CRASH] impact %.1f g, %.0f dps\n", a, g);
+      if (wasMoving(now))
+      {
+        state = CR_IMPACT;
+        impactAt = now;
+        downSince = 0;
+        Serial.printf("[CRASH] impact %.1f g, %.0f dps\n", a, g);
+      }
+      else if (now - lastIgnoredLog > 2000)
+      {
+        lastIgnoredLog = now;
+        Serial.printf("[CRASH] impact %.1f g, %.0f dps ignored: not riding\n", a, g);
+      }
     }
     return;
   }

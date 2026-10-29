@@ -23,9 +23,11 @@
 
 /* Navi Moto's own version (it was upstream's "6.3", which said nothing about this firmware).
    2.0 came with app 2.0 (WiFi update + crash detection); 2.1 (navigation screen fixes) and
-   2.2 (settings texts) are firmware-only and still pair with app 2.0.
+   2.2 (settings texts) are firmware-only and still pair with app 2.0, as does 2.3 (the
+   1.75C board, WiFi updates refused when built for the other board, auto-open
+   navigation on by default) goes with app 2.1: crash detection needs the phone's speed.
    support/build_firmware.py names the merged .bin after it. */
-#define UI_VERSION "2.2"
+#define UI_VERSION "2.3"
 
 /* Fonts don't scale with UI_SCALE_PX, so step the notification rows up on large panels -
    they were falling back to LV_FONT_DEFAULT (montserrat_14), which together with the

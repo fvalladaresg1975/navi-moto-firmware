@@ -101,6 +101,7 @@ RtcPCF8563<TwoWire> Rtc(Wire);
 #if ESPS3_2_06 || ESPS3_1_75
 #include <SensorPCF85063.hpp>
 SensorPCF85063 rtc;
+bool rtcOk = false; // the 1.75C has no RTC: then the time waits for the phone after power-up
 #endif
 
 #if ESPS3_2_06
@@ -1696,7 +1697,8 @@ void configCallback(Config config, uint32_t a, uint32_t b)
 #endif
 
 #if ESPS3_2_06 || ESPS3_1_75
-    rtc.setDateTime(watch.getYear(), watch.getMonth() + 1, watch.getDay(), watch.getHour(true), watch.getMinute(), watch.getSecond());
+    if (rtcOk)
+      rtc.setDateTime(watch.getYear(), watch.getMonth() + 1, watch.getDay(), watch.getHour(true), watch.getMinute(), watch.getSecond());
 #endif
     // ui_update_seconds(watch.getSecond());
     if (!hasUpdatedSec)
@@ -3096,7 +3098,7 @@ void hal_setup()
   watch.setBattery(85);
 
   String about = String(ui_info_text) + "\n" + chip + "\n" + watch.getAddress() +
-                 "\nFirmware " + otaBuildDate();
+                 "\nFirmware " + otaBuildDate() + "\nPlaca " + otaBoardName();
   lv_label_set_text(ui_aboutText, about.c_str());
 
 #if LV_USE_QRCODE == 1
@@ -3124,7 +3126,7 @@ void hal_setup()
   int br = prefs.getInt("brightness", 100);
   circular = prefs.getBool("circular", false);
   alertSwitch = prefs.getBool("alerts", false);
-  navSwitch = prefs.getBool("autonav", false);
+  navSwitch = prefs.getBool("autonav", true); // on unless the rider turned it off: a fresh board opens navigation by itself
   extremePowerSave = prefs.getBool("extremepwr", false);
 
   lv_obj_scroll_to_y(ui_settingsList, 1, LV_ANIM_ON);
@@ -3241,6 +3243,7 @@ void hal_setup()
 	}
   else
   {
+    rtcOk = true;
     RTC_DateTime dt = rtc.getDateTime();
     /* A chip that has never been set reads back as year 2000 or similar. Showing that
        would be worse than showing nothing, so only trust a plausible date and otherwise
