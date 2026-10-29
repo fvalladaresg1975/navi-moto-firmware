@@ -1364,7 +1364,13 @@ void updateBatteryRuntimeLabel(bool onPower)
   }
   if (onPower)
   {
-    lv_label_set_text(ui_batteryRuntimeLabel, "Cargando");
+    /* Plugged in but full: the AXP2101 stops charging (and its gauge reads 100 % a little
+       before it does), so "Cargando" next to "Batería 100%" read as stuck. */
+    bool full = watchBatteryPercent >= 100;
+#if ESPS3_2_06 || ESPS3_1_75
+    full = full || !PMU.isCharging();
+#endif
+    lv_label_set_text(ui_batteryRuntimeLabel, full ? "Cargada" : "Cargando");
     return;
   }
   if (chargeRefEpoch == 0)

@@ -22,10 +22,10 @@
 #include "../../hal/esp32/displays/pins.h"
 
 /* Navi Moto's own version (it was upstream's "6.3", which said nothing about this firmware).
-   2.0 came with app 2.0 (WiFi update + crash detection); 2.1 is firmware-only (navigation
-   screen fixes) and still pairs with app 2.0. support/build_firmware.py names the merged
-   .bin after it. */
-#define UI_VERSION "2.1"
+   2.0 came with app 2.0 (WiFi update + crash detection); 2.1 (navigation screen fixes) and
+   2.2 (settings texts) are firmware-only and still pair with app 2.0.
+   support/build_firmware.py names the merged .bin after it. */
+#define UI_VERSION "2.2"
 
 /* Fonts don't scale with UI_SCALE_PX, so step the notification rows up on large panels -
    they were falling back to LV_FONT_DEFAULT (montserrat_14), which together with the
@@ -937,7 +937,7 @@ void ui_event_alert_states(lv_event_t *e)
             states |= 0x08;
       }
 
-      lv_label_set_text_fmt(ui_alertStateLabel, "Alert Settings\n---------------------\n%s", get_alert_state_text(states));
+      lv_label_set_text_fmt(ui_alertStateLabel, "Alertas\n---------------------\n%s", get_alert_state_text(states));
 
       on_alert_state_change(states);
 }
@@ -1560,7 +1560,7 @@ void ui_event_face_select(lv_event_t *e)
 
 void set_alert_states(int32_t states)
 {
-      lv_label_set_text_fmt(ui_alertStateLabel, "Alert Settings\n---------------------\n%s", get_alert_state_text(states));
+      lv_label_set_text_fmt(ui_alertStateLabel, "Alertas\n---------------------\n%s", get_alert_state_text(states));
 
       _ui_state_modify(ui_popupalerts, LV_STATE_CHECKED, check_bit(states, 0x01) ? _UI_MODIFY_FLAG_ADD : _UI_MODIFY_FLAG_REMOVE);
       _ui_state_modify(ui_alertScreenOn, LV_STATE_CHECKED, check_bit(states, 0x02) ? _UI_MODIFY_FLAG_ADD : _UI_MODIFY_FLAG_REMOVE);
@@ -2904,6 +2904,12 @@ void ui_settingsScreen_screen_init(void)
       lv_obj_set_style_pad_right(ui_settingsList, 0, LV_PART_MAIN | LV_STATE_DEFAULT);
       lv_obj_set_style_pad_top(ui_settingsList, 50, LV_PART_MAIN | LV_STATE_DEFAULT);
       lv_obj_set_style_pad_bottom(ui_settingsList, 70, LV_PART_MAIN | LV_STATE_DEFAULT);
+#if UI_SCREEN_MIN_PX >= 400
+      // The last row ("Acerca de", 6 lines) could only scroll down to the narrow bottom of
+      // the circle, which cut its lines on the right and hid the last ones. Enough room to
+      // bring it up to the wide middle.
+      lv_obj_set_style_pad_bottom(ui_settingsList, 200, LV_PART_MAIN | LV_STATE_DEFAULT);
+#endif
 
       ui_settingsTitle = lv_label_create(ui_settingsList);
       lv_obj_set_width(ui_settingsTitle, UI_SCALE_PX(150));
