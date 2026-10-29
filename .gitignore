@@ -18,3 +18,6 @@ backups/
 
 # Lean-logger recordings pulled from the watch (personal ride data, not source)
 tools/lean_data/
+
+# Build date for the WiFi update check, rewritten on every build (support/navi_build_stamp.py)
+hal/esp32/navi_build.c

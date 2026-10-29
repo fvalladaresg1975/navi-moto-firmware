@@ -39,6 +39,8 @@
 #include "app_hal.h"
 
 #include "feedback.h"
+#include "navi_ota.h"   // firmware update over WiFi (0xCB)
+#include "navi_crash.h" // crash detection (0xCC)
 
 #include <lvgl.h>
 #include "src/libs/tjpgd/tjpgd.h" // LVGL's TJpgDec, for the "Foto" face's photo
@@ -2439,6 +2441,9 @@ void dataCallback(uint8_t *data, int length)
 
      Runs on the NimBLE host task, so it only records the value - hal_loop() does the LVGL
      work, same rule as notifications/weather/contacts/calls. */
+  otaOnPacket(data, length);   // 0xCB, navi_ota.cpp
+  crashOnPacket(data, length); // 0xCC, navi_crash.cpp
+
   if (length >= 7 && data[0] == 0xAB && data[4] == 0xC3)
   {
     pendingMusicPlaying = (data[6] == 0x01);
@@ -2906,6 +2911,7 @@ void hal_setup()
   }
 
   prefs.begin("my-app");
+  otaBoot(); // did a WiFi update just install, or fail and go back?
   memset((void *)extraRain, 255, sizeof(extraRain)); // chance of rain unknown until 0xC9
 
   int rt = prefs.getInt("rotate", 0);
@@ -3083,7 +3089,8 @@ void hal_setup()
   watch.set24Hour(true);
   watch.setBattery(85);
 
-  String about = String(ui_info_text) + "\n" + chip + "\n" + watch.getAddress();
+  String about = String(ui_info_text) + "\n" + chip + "\n" + watch.getAddress() +
+                 "\nFirmware " + otaBuildDate();
   lv_label_set_text(ui_aboutText, about.c_str());
 
 #if LV_USE_QRCODE == 1
@@ -3269,6 +3276,10 @@ void hal_setup()
       lv_label_set_text_fmt(ui_batteryLabel, "Batería %d%%", watchBatteryPercent);
     }
   }
+#endif
+
+#if ESPS3_1_75
+  crashSetup(); // the QMI8658 shares the bus brought up above
 #endif
 
   ui_update_seconds(watch.getSecond());
@@ -3504,6 +3515,9 @@ void hal_loop()
       brightnessReportDue = false;
       reportBrightness();
     }
+
+    otaLoop();
+    crashLoop();
 
     if (photoRxDone)
     {
@@ -4003,6 +4017,25 @@ void hal_loop()
 bool isDay()
 {
   return watch.getHour(true) > 7 && watch.getHour(true) < 21;
+}
+
+/* For navi_ota.cpp: a firmware update is refused on a low battery unless charging. */
+int halBatteryPercent(void)
+{
+#if ESPS3_2_06 || ESPS3_1_75
+  return watchBatteryPercent;
+#else
+  return -1;
+#endif
+}
+
+bool halExternalPower(void)
+{
+#if ESPS3_2_06 || ESPS3_1_75
+  return PMU.isVbusIn();
+#else
+  return true;
+#endif
 }
 
 /* Data for the Navi Moto faces (src/common/navi_face.h). Called by the face that is on

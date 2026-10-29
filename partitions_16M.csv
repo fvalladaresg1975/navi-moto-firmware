@@ -1,6 +1,10 @@
 # Name,   Type, SubType, Offset,  Size, Flags
+# Two app slots for firmware updates over WiFi (hal/esp32/navi_ota.cpp): the update goes
+# to the slot not running. app0 still starts at 0x10000 and ffat stays where it was, so
+# flashing this table over the old single-slot one keeps the photo and the settings.
 nvs,      data, nvs,     0x9000,  0x5000,
 otadata,  data, ota,     0xe000,  0x2000,
-app0,     app,  ota_0,   0x10000, 0x900000,
+app0,     app,  ota_0,   0x10000, 0x480000,
+app1,     app,  ota_1,   0x490000,0x480000,
 ffat,     data, fat,     0x910000,0x6E0000,
 coredump, data, coredump,0xFF0000,0x10000,
