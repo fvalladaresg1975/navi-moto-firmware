@@ -21,7 +21,10 @@
 
 #include "../../hal/esp32/displays/pins.h"
 
-#define UI_VERSION "6.3"
+/* Navi Moto's own version, released together with the phone app of the same number (2.0:
+   WiFi update + crash detection). It was upstream's "6.3", which said nothing about this
+   firmware. support/build_firmware.py names the merged .bin after it. */
+#define UI_VERSION "2.0"
 
 /* Fonts don't scale with UI_SCALE_PX, so step the notification rows up on large panels -
    they were falling back to LV_FONT_DEFAULT (montserrat_14), which together with the
@@ -1068,23 +1071,6 @@ void ui_event_batterySlider(lv_event_t *e)
       if (event_code == LV_EVENT_RELEASED)
       {
             onBatteryChange(e);
-      }
-}
-
-void ui_event_aboutPanel(lv_event_t *e)
-{
-      lv_disp_t *display = lv_display_get_default();
-      lv_obj_t *actScr = lv_display_get_screen_active(display);
-      if (actScr != ui_settingsScreen)
-      {
-            return;
-      }
-
-      lv_event_code_t event_code = lv_event_get_code(e);
-      lv_obj_t *target = lv_event_get_target(e);
-      if (event_code == LV_EVENT_CLICKED)
-      {
-            _ui_screen_change(ui_connectScreen, LV_SCR_LOAD_ANIM_FADE_ON, 500, 0);
       }
 }
 
@@ -3405,8 +3391,8 @@ void ui_settingsScreen_screen_init(void)
       lv_obj_set_x(ui_aboutText, UI_SCALE_PX(60));
       lv_obj_set_y(ui_aboutText, UI_SCALE_PX(7));
       lv_label_set_text(ui_aboutText, "Navi Moto");
-
-      lv_obj_add_event_cb(ui_aboutPanel, ui_event_aboutPanel, LV_EVENT_ALL, NULL);
+      // No tap action: it opened upstream's "Escanea para conectar" QR, which pairs with the
+      // Chronos app - the Navi Moto app finds the board over BLE by itself.
 
       lv_obj_add_event_cb(ui_settingsList, onScroll, LV_EVENT_SCROLL, NULL);
       lv_obj_add_event_cb(ui_brightnessSlider, ui_event_brightnessSlider, LV_EVENT_ALL, NULL);
