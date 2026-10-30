@@ -11,6 +11,7 @@
 
 #include "ui.h"
 #include "../common/navi_face.h" // big Montserrat fonts (src/fonts_nm)
+#include "../common/ui_prescale.h"
 #include "ui_helpers.h"
 
 #include "display/lv_display_private.h"
@@ -30,7 +31,7 @@
    with crash detection off; the app's route demo is not stored as a trip) goes with
    app 2.2, which marks the demo (0xCD).
    support/build_firmware.py names the merged .bin after it. */
-#define UI_VERSION "2.4"
+#define UI_VERSION "2.5"
 
 /* Fonts don't scale with UI_SCALE_PX, so step the notification rows up on large panels -
    they were falling back to LV_FONT_DEFAULT (montserrat_14), which together with the
@@ -1405,8 +1406,12 @@ void onScroll(lv_event_t *e)
                   x = r - res.i;
             }
 
-            /*Translate the item by the calculated X coordinate*/
-            lv_obj_set_style_translate_x(child, circular ? x : 0, 0);
+            /*Translate the item by the calculated X coordinate. Only when it changes:
+              translate_x makes the list redo its layout, which on the contact list kept
+              the screen redrawing at ~5 frames a second while nothing moved.*/
+            lv_coord_t tx = circular ? x : 0;
+            if (lv_obj_get_style_translate_x(child, 0) != tx)
+                  lv_obj_set_style_translate_x(child, tx, 0);
 
             /*Use some opacity with larger translations*/
             // lv_opa_t opa = lv_map(x, 0, r, LV_OPA_TRANSP, LV_OPA_COVER);
@@ -1702,12 +1707,12 @@ int getNotificationIconIndex(int id)
 
 void setWeatherIcon(lv_obj_t *obj, int id, bool day)
 {
-      lv_image_set_src(obj, day ? weatherIcons[getWeatherIconIndex(id)] : weatherNtIcons[getWeatherIconIndex(id)]);
+      ui_image_src(obj, day ? weatherIcons[getWeatherIconIndex(id)] : weatherNtIcons[getWeatherIconIndex(id)]);
 }
 
 void setNotificationIcon(lv_obj_t *obj, int appId)
 {
-      lv_image_set_src(obj, notificationIcons[getNotificationIconIndex(appId)]);
+      ui_image_src(obj, notificationIcons[getNotificationIconIndex(appId)]);
 }
 
 void add_appList(const char *appName, int index, const void *img)
@@ -1741,7 +1746,7 @@ void add_appList(const char *appName, int index, const void *img)
       lv_obj_set_align(ui_appListIcon, LV_ALIGN_CENTER);
       lv_obj_add_flag(ui_appListIcon, LV_OBJ_FLAG_ADV_HITTEST);   /// Flags
       lv_obj_remove_flag(ui_appListIcon, LV_OBJ_FLAG_SCROLLABLE); /// Flags
-      lv_image_set_scale(ui_appListIcon, (150 * UI_SCALE) / 256);
+      ui_image_scale(ui_appListIcon, (150 * UI_SCALE) / 256);
 
       lv_obj_t *ui_appListLabel = lv_label_create(ui_appListPanel);
       lv_obj_set_width(ui_appListLabel, UI_SCALE_PX(160));
@@ -1784,7 +1789,7 @@ void add_gameList(const char *appName, int index, const void *img)
       lv_obj_set_align(ui_gameListIcon, LV_ALIGN_CENTER);
       lv_obj_add_flag(ui_gameListIcon, LV_OBJ_FLAG_ADV_HITTEST);   /// Flags
       lv_obj_remove_flag(ui_gameListIcon, LV_OBJ_FLAG_SCROLLABLE); /// Flags
-      lv_image_set_scale(ui_gameListIcon, (150 * UI_SCALE) / 256);
+      ui_image_scale(ui_gameListIcon, (150 * UI_SCALE) / 256);
 
       lv_obj_t *ui_gameListLabel = lv_label_create(ui_gameListPanel);
       lv_obj_set_width(ui_gameListLabel, UI_SCALE_PX(160));
@@ -1827,7 +1832,7 @@ void add_app_list(const char *appName, const void *icon, void (*callback)(lv_eve
       lv_obj_set_align(ui_gameListIcon, LV_ALIGN_CENTER);
       lv_obj_add_flag(ui_gameListIcon, LV_OBJ_FLAG_ADV_HITTEST);   /// Flags
       lv_obj_remove_flag(ui_gameListIcon, LV_OBJ_FLAG_SCROLLABLE); /// Flags
-      lv_image_set_scale(ui_gameListIcon, (150 * UI_SCALE) / 256);
+      ui_image_scale(ui_gameListIcon, (150 * UI_SCALE) / 256);
 
       lv_obj_t *ui_gameListLabel = lv_label_create(ui_gameListPanel);
       lv_obj_set_width(ui_gameListLabel, UI_SCALE_PX(160));
@@ -1969,7 +1974,7 @@ void addForecast(int day, int temp, int icon)
       lv_obj_set_align(forecastIcon, LV_ALIGN_CENTER);
       lv_obj_add_flag(forecastIcon, LV_OBJ_FLAG_ADV_HITTEST);   /// Flags
       lv_obj_remove_flag(forecastIcon, LV_OBJ_FLAG_SCROLLABLE); /// Flags
-      lv_image_set_scale(forecastIcon, (150 * UI_SCALE) / 256);
+      ui_image_scale(forecastIcon, (150 * UI_SCALE) / 256);
       setWeatherIcon(forecastIcon, icon, true);
 
       lv_obj_t *forecastTemp = lv_label_create(forecastItem);
@@ -2002,11 +2007,13 @@ void addHourlyWeather(int hour, int icon, int temp, int humidity, int wind, int 
       lv_obj_set_flex_flow(ui_hourlyPanel, LV_FLEX_FLOW_COLUMN);
       lv_obj_set_flex_align(ui_hourlyPanel, LV_FLEX_ALIGN_CENTER, LV_FLEX_ALIGN_CENTER, LV_FLEX_ALIGN_CENTER);
       lv_obj_remove_flag(ui_hourlyPanel, LV_OBJ_FLAG_SCROLLABLE); /// Flags
-      lv_obj_set_style_bg_color(ui_hourlyPanel, lv_color_hex(0x000000), LV_PART_MAIN | LV_STATE_DEFAULT);
+      /* Square, on a dark grey card instead of a white border round a black one: the
+         software renderer draws a rounded border pixel by pixel, and with five of these
+         panels on screen it was the slowest part of scrolling the forecast. */
+      lv_obj_set_style_radius(ui_hourlyPanel, 0, LV_PART_MAIN | LV_STATE_DEFAULT);
+      lv_obj_set_style_bg_color(ui_hourlyPanel, lv_color_hex(info ? 0x000000 : 0x1C1C1C), LV_PART_MAIN | LV_STATE_DEFAULT);
       lv_obj_set_style_bg_opa(ui_hourlyPanel, 255, LV_PART_MAIN | LV_STATE_DEFAULT);
-      lv_obj_set_style_border_color(ui_hourlyPanel, lv_color_hex(0xFFFFFF), LV_PART_MAIN | LV_STATE_DEFAULT);
-      lv_obj_set_style_border_opa(ui_hourlyPanel, 255, LV_PART_MAIN | LV_STATE_DEFAULT);
-      lv_obj_set_style_border_width(ui_hourlyPanel, info ? 0 : 1, LV_PART_MAIN | LV_STATE_DEFAULT);
+      lv_obj_set_style_border_width(ui_hourlyPanel, 0, LV_PART_MAIN | LV_STATE_DEFAULT);
 
       lv_obj_t *ui_hourlyTime = lv_label_create(ui_hourlyPanel);
       lv_obj_set_width(ui_hourlyTime, UI_SCALE_PX(80));
@@ -2026,7 +2033,7 @@ void addHourlyWeather(int hour, int icon, int temp, int humidity, int wind, int 
       lv_obj_set_align(ui_hourlyIcon, LV_ALIGN_CENTER);
       lv_obj_add_flag(ui_hourlyIcon, LV_OBJ_FLAG_CLICKABLE);     /// Flags
       lv_obj_remove_flag(ui_hourlyIcon, LV_OBJ_FLAG_SCROLLABLE); /// Flags
-      lv_image_set_scale(ui_hourlyIcon, (140 * UI_SCALE) / 256);
+      ui_image_scale(ui_hourlyIcon, (140 * UI_SCALE) / 256);
       setWeatherIcon(ui_hourlyIcon, icon, true);
 
       lv_obj_t *ui_hourlyTemp = lv_label_create(ui_hourlyPanel);
@@ -2088,7 +2095,7 @@ void addNotificationList(int appId, const char *message, int index)
       lv_obj_remove_flag(notificationIcon, LV_OBJ_FLAG_SCROLLABLE); /// Flags
       /* The app icons are a fixed 32px asset - grow them with the panel, same as the
          app/settings/contacts lists already do. */
-      lv_image_set_scale(notificationIcon, UI_SCALE);
+      ui_image_scale(notificationIcon, UI_SCALE);
       setNotificationIcon(notificationIcon, appId);
 
       lv_obj_t *notificationText = lv_label_create(notificationItem);
@@ -2519,7 +2526,7 @@ void ui_clockScreen_screen_init(void)
       lv_obj_set_align(ui_weatherIcon, LV_ALIGN_CENTER);
       lv_obj_add_flag(ui_weatherIcon, LV_OBJ_FLAG_ADV_HITTEST);   /// Flags
       lv_obj_remove_flag(ui_weatherIcon, LV_OBJ_FLAG_SCROLLABLE); /// Flags
-      lv_image_set_scale(ui_weatherIcon, (150 * UI_SCALE) / 256);
+      ui_image_scale(ui_weatherIcon, (150 * UI_SCALE) / 256);
 
       ui_weatherTemp = lv_label_create(ui_clockScreen);
       lv_obj_set_width(ui_weatherTemp, LV_SIZE_CONTENT);  /// 1
@@ -2562,7 +2569,7 @@ void ui_clockScreen_screen_init(void)
       lv_obj_align(ui_dateLabel, LV_ALIGN_CENTER, 72, -58);
       lv_obj_set_style_text_font(ui_minuteLabel, &nm_digits_120, LV_PART_MAIN | LV_STATE_DEFAULT);
       lv_obj_align(ui_minuteLabel, LV_ALIGN_CENTER, 78, 72);
-      lv_image_set_scale(ui_weatherIcon, 400); // ~100 px
+      ui_image_scale(ui_weatherIcon, 400); // ~100 px
       lv_obj_align(ui_weatherIcon, LV_ALIGN_CENTER, -88, 52);
       lv_obj_set_style_text_font(ui_weatherTemp, &nm_text_28, LV_PART_MAIN | LV_STATE_DEFAULT);
       lv_obj_align(ui_weatherTemp, LV_ALIGN_CENTER, -88, 122);
@@ -2597,7 +2604,7 @@ void ui_clockScreen_screen_init(void)
       lv_obj_set_align(ui_alertIcon, LV_ALIGN_LEFT_MID);
       lv_obj_add_flag(ui_alertIcon, LV_OBJ_FLAG_ADV_HITTEST);   /// Flags
       lv_obj_remove_flag(ui_alertIcon, LV_OBJ_FLAG_SCROLLABLE); /// Flags
-      lv_image_set_scale(ui_alertIcon, UI_SCALE);
+      ui_image_scale(ui_alertIcon, UI_SCALE);
 
       ui_alertText = lv_label_create(ui_alertPanel);
       lv_obj_set_width(ui_alertText, UI_SCALE_PX(142));
@@ -2656,7 +2663,7 @@ void ui_weatherScreen_screen_init(void)
       lv_obj_set_align(ui_weatherCurrentIcon, LV_ALIGN_CENTER);
       lv_obj_add_flag(ui_weatherCurrentIcon, LV_OBJ_FLAG_ADV_HITTEST);   /// Flags
       lv_obj_remove_flag(ui_weatherCurrentIcon, LV_OBJ_FLAG_SCROLLABLE); /// Flags
-      lv_image_set_scale(ui_weatherCurrentIcon, (400 * UI_SCALE) / 256);
+      ui_image_scale(ui_weatherCurrentIcon, (400 * UI_SCALE) / 256);
 
       ui_weatherCurrentTemp = lv_label_create(ui_weatherPanel);
       lv_obj_set_width(ui_weatherCurrentTemp, LV_SIZE_CONTENT);  /// 1
@@ -2970,7 +2977,7 @@ void ui_settingsScreen_screen_init(void)
       lv_obj_set_align(ui_brightnessIcon, LV_ALIGN_CENTER);
       lv_obj_add_flag(ui_brightnessIcon, LV_OBJ_FLAG_ADV_HITTEST);   /// Flags
       lv_obj_remove_flag(ui_brightnessIcon, LV_OBJ_FLAG_SCROLLABLE); /// Flags
-      lv_image_set_scale(ui_brightnessIcon, (150 * UI_SCALE) / 256);
+      ui_image_scale(ui_brightnessIcon, (150 * UI_SCALE) / 256);
 
       ui_brightnessLabel = lv_label_create(ui_brightnessPanel);
       lv_obj_set_width(ui_brightnessLabel, LV_SIZE_CONTENT);  /// 1
@@ -3005,7 +3012,7 @@ void ui_settingsScreen_screen_init(void)
       lv_obj_set_align(ui_scrollIcon, LV_ALIGN_CENTER);
       lv_obj_add_flag(ui_scrollIcon, LV_OBJ_FLAG_ADV_HITTEST);   /// Flags
       lv_obj_remove_flag(ui_scrollIcon, LV_OBJ_FLAG_SCROLLABLE); /// Flags
-      lv_image_set_scale(ui_scrollIcon, (150 * UI_SCALE) / 256);
+      ui_image_scale(ui_scrollIcon, (150 * UI_SCALE) / 256);
 
       ui_Switch2 = lv_switch_create(ui_scrollingPanel);
       lv_obj_set_width(ui_Switch2, UI_SCALE_PX(50));
@@ -3065,7 +3072,7 @@ void ui_settingsScreen_screen_init(void)
       lv_obj_set_align(ui_timeoutIcon, LV_ALIGN_CENTER);
       lv_obj_add_flag(ui_timeoutIcon, LV_OBJ_FLAG_ADV_HITTEST);   /// Flags
       lv_obj_remove_flag(ui_timeoutIcon, LV_OBJ_FLAG_SCROLLABLE); /// Flags
-      lv_image_set_scale(ui_timeoutIcon, (150 * UI_SCALE) / 256);
+      ui_image_scale(ui_timeoutIcon, (150 * UI_SCALE) / 256);
 
       ui_timeoutLabel = lv_label_create(ui_timeoutPanel);
       lv_obj_set_width(ui_timeoutLabel, LV_SIZE_CONTENT);  /// 1
@@ -3101,7 +3108,7 @@ void ui_settingsScreen_screen_init(void)
       lv_obj_set_align(ui_extremePowerSaveIcon, LV_ALIGN_CENTER);
       lv_obj_add_flag(ui_extremePowerSaveIcon, LV_OBJ_FLAG_ADV_HITTEST);   /// Flags
       lv_obj_remove_flag(ui_extremePowerSaveIcon, LV_OBJ_FLAG_SCROLLABLE); /// Flags
-      lv_image_set_scale(ui_extremePowerSaveIcon, (150 * UI_SCALE) / 256);
+      ui_image_scale(ui_extremePowerSaveIcon, (150 * UI_SCALE) / 256);
 
       ui_extremePowerSaveSwitch = lv_switch_create(ui_extremePowerSavePanel);
       lv_obj_set_width(ui_extremePowerSaveSwitch, UI_SCALE_PX(50));
@@ -3162,7 +3169,7 @@ void ui_settingsScreen_screen_init(void)
       lv_obj_set_align(ui_rotateIcon, LV_ALIGN_CENTER);
       lv_obj_add_flag(ui_rotateIcon, LV_OBJ_FLAG_ADV_HITTEST);   /// Flags
       lv_obj_remove_flag(ui_rotateIcon, LV_OBJ_FLAG_SCROLLABLE); /// Flags
-      lv_image_set_scale(ui_rotateIcon, (150 * UI_SCALE) / 256);
+      ui_image_scale(ui_rotateIcon, (150 * UI_SCALE) / 256);
 
       ui_rotateLabel = lv_label_create(ui_rotatePanel);
       lv_obj_set_width(ui_rotateLabel, LV_SIZE_CONTENT);  /// 1
@@ -3216,7 +3223,7 @@ void ui_settingsScreen_screen_init(void)
       // lv_obj_set_align(ui_languageIcon, LV_ALIGN_CENTER);
       // lv_obj_add_flag(ui_languageIcon, LV_OBJ_FLAG_ADV_HITTEST);  /// Flags
       // lv_obj_remove_flag(ui_languageIcon, LV_OBJ_FLAG_SCROLLABLE); /// Flags
-      // lv_image_set_scale(ui_languageIcon, (150 * UI_SCALE) / 256);
+      // ui_image_scale(ui_languageIcon, (150 * UI_SCALE) / 256);
 
       // ui_languageLabel = lv_label_create(ui_languagePanel);
       // lv_obj_set_width(ui_languageLabel, LV_SIZE_CONTENT);  /// 1
@@ -3252,7 +3259,7 @@ void ui_settingsScreen_screen_init(void)
       lv_obj_set_align(ui_navStateIcon, LV_ALIGN_CENTER);
       lv_obj_add_flag(ui_navStateIcon, LV_OBJ_FLAG_ADV_HITTEST);   /// Flags
       lv_obj_remove_flag(ui_navStateIcon, LV_OBJ_FLAG_SCROLLABLE); /// Flags
-      lv_image_set_scale(ui_navStateIcon, (150 * UI_SCALE) / 256);
+      ui_image_scale(ui_navStateIcon, (150 * UI_SCALE) / 256);
 
       ui_navStateSwitch = lv_switch_create(ui_navStatePanel);
       lv_obj_set_width(ui_navStateSwitch, UI_SCALE_PX(50));
@@ -3295,7 +3302,7 @@ void ui_settingsScreen_screen_init(void)
       lv_obj_set_align(ui_alertStateIcon, LV_ALIGN_CENTER);
       lv_obj_add_flag(ui_alertStateIcon, LV_OBJ_FLAG_ADV_HITTEST);   /// Flags
       lv_obj_remove_flag(ui_alertStateIcon, LV_OBJ_FLAG_SCROLLABLE); /// Flags
-      lv_image_set_scale(ui_alertStateIcon, (150 * UI_SCALE) / 256);
+      ui_image_scale(ui_alertStateIcon, (150 * UI_SCALE) / 256);
 
       // ui_alertStateSwitch = lv_switch_create(ui_alertStatePanel);
       // lv_obj_set_width(ui_alertStateSwitch, UI_SCALE_PX(50));
@@ -3350,7 +3357,7 @@ void ui_settingsScreen_screen_init(void)
       lv_obj_set_align(ui_batteryIcon, LV_ALIGN_CENTER);
       lv_obj_add_flag(ui_batteryIcon, LV_OBJ_FLAG_ADV_HITTEST);   /// Flags
       lv_obj_remove_flag(ui_batteryIcon, LV_OBJ_FLAG_SCROLLABLE); /// Flags
-      lv_image_set_scale(ui_batteryIcon, (150 * UI_SCALE) / 256);
+      ui_image_scale(ui_batteryIcon, (150 * UI_SCALE) / 256);
 
       ui_batteryLabel = lv_label_create(ui_batteryPanel);
       lv_obj_set_width(ui_batteryLabel, LV_SIZE_CONTENT);  /// 1
@@ -3395,7 +3402,7 @@ void ui_settingsScreen_screen_init(void)
       lv_obj_set_y(ui_aboutIcon, UI_SCALE_PX(2));
       lv_obj_add_flag(ui_aboutIcon, LV_OBJ_FLAG_ADV_HITTEST);   /// Flags
       lv_obj_remove_flag(ui_aboutIcon, LV_OBJ_FLAG_SCROLLABLE); /// Flags
-      lv_image_set_scale(ui_aboutIcon, (150 * UI_SCALE) / 256);
+      ui_image_scale(ui_aboutIcon, (150 * UI_SCALE) / 256);
 
       ui_aboutText = lv_label_create(ui_aboutPanel);
       lv_obj_set_width(ui_aboutText, UI_SCALE_PX(130));
@@ -3572,6 +3579,7 @@ void ui_controlScreen_screen_init(void)
             lv_obj_set_style_arc_color(arc, lv_color_hex(0x2C2C2A), LV_PART_MAIN | LV_STATE_DEFAULT);
             lv_obj_set_style_arc_width(arc, UI_SCALE_PX(5), LV_PART_INDICATOR | LV_STATE_DEFAULT);
             lv_obj_set_style_arc_rounded(arc, true, LV_PART_INDICATOR | LV_STATE_DEFAULT);
+            nf_arc_cache(arc);
             if (side == 0)
                   ui_ctlBattBoardArc = arc;
             else
@@ -3598,7 +3606,7 @@ void ui_controlScreen_screen_init(void)
       lv_obj_set_align(ui_musicPlayButton, LV_ALIGN_CENTER);
       lv_obj_add_flag(ui_musicPlayButton, LV_OBJ_FLAG_CLICKABLE);     /// Flags
       lv_obj_remove_flag(ui_musicPlayButton, LV_OBJ_FLAG_SCROLLABLE); /// Flags
-      lv_image_set_scale(ui_musicPlayButton, UI_SCALE_PX(200));
+      ui_image_scale(ui_musicPlayButton, UI_SCALE_PX(200));
       lv_obj_set_style_radius(ui_musicPlayButton, 5, LV_PART_MAIN | LV_STATE_PRESSED);
       lv_obj_set_style_bg_color(ui_musicPlayButton, lv_color_hex(0xFFFFFF), LV_PART_MAIN | LV_STATE_PRESSED);
       lv_obj_set_style_bg_opa(ui_musicPlayButton, 255, LV_PART_MAIN | LV_STATE_PRESSED);
@@ -3612,7 +3620,7 @@ void ui_controlScreen_screen_init(void)
       lv_obj_set_align(ui_musicPrevButton, LV_ALIGN_CENTER);
       lv_obj_add_flag(ui_musicPrevButton, LV_OBJ_FLAG_CLICKABLE);     /// Flags
       lv_obj_remove_flag(ui_musicPrevButton, LV_OBJ_FLAG_SCROLLABLE); /// Flags
-      lv_image_set_scale(ui_musicPrevButton, UI_SCALE_PX(200));
+      ui_image_scale(ui_musicPrevButton, UI_SCALE_PX(200));
       lv_obj_set_style_radius(ui_musicPrevButton, 5, LV_PART_MAIN | LV_STATE_PRESSED);
       lv_obj_set_style_bg_color(ui_musicPrevButton, lv_color_hex(0xFFFFFF), LV_PART_MAIN | LV_STATE_PRESSED);
       lv_obj_set_style_bg_opa(ui_musicPrevButton, 255, LV_PART_MAIN | LV_STATE_PRESSED);
@@ -3626,7 +3634,7 @@ void ui_controlScreen_screen_init(void)
       lv_obj_set_align(ui_musicNextButton, LV_ALIGN_CENTER);
       lv_obj_add_flag(ui_musicNextButton, LV_OBJ_FLAG_CLICKABLE);     /// Flags
       lv_obj_remove_flag(ui_musicNextButton, LV_OBJ_FLAG_SCROLLABLE); /// Flags
-      lv_image_set_scale(ui_musicNextButton, UI_SCALE_PX(200));
+      ui_image_scale(ui_musicNextButton, UI_SCALE_PX(200));
       lv_obj_set_style_radius(ui_musicNextButton, 5, LV_PART_MAIN | LV_STATE_PRESSED);
       lv_obj_set_style_bg_color(ui_musicNextButton, lv_color_hex(0xFFFFFF), LV_PART_MAIN | LV_STATE_PRESSED);
       lv_obj_set_style_bg_opa(ui_musicNextButton, 255, LV_PART_MAIN | LV_STATE_PRESSED);
@@ -3643,7 +3651,7 @@ void ui_controlScreen_screen_init(void)
       lv_obj_add_state(ui_btStateButton, LV_STATE_CHECKED);         /// States
       lv_obj_add_flag(ui_btStateButton, LV_OBJ_FLAG_CHECKABLE);     /// Flags
       lv_obj_remove_flag(ui_btStateButton, LV_OBJ_FLAG_SCROLLABLE); /// Flags
-      lv_image_set_scale(ui_btStateButton, UI_SCALE_PX(200));
+      ui_image_scale(ui_btStateButton, UI_SCALE_PX(200));
       lv_obj_set_style_image_recolor(ui_btStateButton, lv_color_hex(0x000000), LV_PART_MAIN | LV_STATE_CHECKED);
       lv_obj_set_style_image_recolor_opa(ui_btStateButton, 230, LV_PART_MAIN | LV_STATE_CHECKED);
       lv_obj_set_style_radius(ui_btStateButton, 5, LV_PART_MAIN | LV_STATE_PRESSED);
@@ -3673,7 +3681,7 @@ void ui_controlScreen_screen_init(void)
       lv_obj_add_state(ui_phoneSearchButton, LV_STATE_CHECKED);                                      /// States
       lv_obj_add_flag(ui_phoneSearchButton, LV_OBJ_FLAG_CLICKABLE);                                  /// Flags
       lv_obj_remove_flag(ui_phoneSearchButton, LV_OBJ_FLAG_GESTURE_BUBBLE | LV_OBJ_FLAG_SCROLLABLE); /// Flags
-      lv_image_set_scale(ui_phoneSearchButton, UI_SCALE_PX(200));
+      ui_image_scale(ui_phoneSearchButton, UI_SCALE_PX(200));
       lv_obj_set_style_image_recolor(ui_phoneSearchButton, lv_color_hex(0x000000), LV_PART_MAIN | LV_STATE_CHECKED);
       lv_obj_set_style_image_recolor_opa(ui_phoneSearchButton, 230, LV_PART_MAIN | LV_STATE_CHECKED);
       lv_obj_set_style_radius(ui_phoneSearchButton, 5, LV_PART_MAIN | LV_STATE_PRESSED);
@@ -3689,7 +3697,7 @@ void ui_controlScreen_screen_init(void)
       lv_obj_set_align(ui_volumeUpButton, LV_ALIGN_CENTER);
       lv_obj_add_flag(ui_volumeUpButton, LV_OBJ_FLAG_CLICKABLE);     /// Flags
       lv_obj_remove_flag(ui_volumeUpButton, LV_OBJ_FLAG_SCROLLABLE); /// Flags
-      lv_image_set_scale(ui_volumeUpButton, UI_SCALE_PX(200));
+      ui_image_scale(ui_volumeUpButton, UI_SCALE_PX(200));
       lv_obj_set_style_radius(ui_volumeUpButton, 5, LV_PART_MAIN | LV_STATE_PRESSED);
       lv_obj_set_style_bg_color(ui_volumeUpButton, lv_color_hex(0xFFFFFF), LV_PART_MAIN | LV_STATE_PRESSED);
       lv_obj_set_style_bg_opa(ui_volumeUpButton, 255, LV_PART_MAIN | LV_STATE_PRESSED);
@@ -3703,7 +3711,7 @@ void ui_controlScreen_screen_init(void)
       lv_obj_set_align(ui_volumeDownButton, LV_ALIGN_CENTER);
       lv_obj_add_flag(ui_volumeDownButton, LV_OBJ_FLAG_CLICKABLE);     /// Flags
       lv_obj_remove_flag(ui_volumeDownButton, LV_OBJ_FLAG_SCROLLABLE); /// Flags
-      lv_image_set_scale(ui_volumeDownButton, UI_SCALE_PX(200));
+      ui_image_scale(ui_volumeDownButton, UI_SCALE_PX(200));
       lv_obj_set_style_radius(ui_volumeDownButton, 5, LV_PART_MAIN | LV_STATE_PRESSED);
       lv_obj_set_style_bg_color(ui_volumeDownButton, lv_color_hex(0xFFFFFF), LV_PART_MAIN | LV_STATE_PRESSED);
       lv_obj_set_style_bg_opa(ui_volumeDownButton, 255, LV_PART_MAIN | LV_STATE_PRESSED);
@@ -3717,7 +3725,7 @@ void ui_controlScreen_screen_init(void)
       lv_obj_set_align(ui_qrCodeButton, LV_ALIGN_CENTER);
       lv_obj_add_flag(ui_qrCodeButton, LV_OBJ_FLAG_CLICKABLE);     /// Flags
       lv_obj_remove_flag(ui_qrCodeButton, LV_OBJ_FLAG_SCROLLABLE); /// Flags
-      lv_image_set_scale(ui_qrCodeButton, UI_SCALE_PX(200));
+      ui_image_scale(ui_qrCodeButton, UI_SCALE_PX(200));
       lv_obj_set_style_radius(ui_qrCodeButton, 5, LV_PART_MAIN | LV_STATE_PRESSED);
       lv_obj_set_style_bg_color(ui_qrCodeButton, lv_color_hex(0xFFFFFF), LV_PART_MAIN | LV_STATE_PRESSED);
       lv_obj_set_style_bg_opa(ui_qrCodeButton, 255, LV_PART_MAIN | LV_STATE_PRESSED);
@@ -3814,7 +3822,11 @@ void ui_controlBattery(int boardPct, bool boardCharging, int phonePct, bool phon
             int p = pct[i] > 100 ? 100 : pct[i];
             lv_label_set_text_fmt(labels[i], chg[i] ? LV_SYMBOL_CHARGE "%s %d%%" : "%s %d%%", icon, p);
             lv_arc_set_value(arcs[i], p);
-            lv_obj_set_style_arc_color(arcs[i], battColor(p, chg[i]), LV_PART_INDICATOR | LV_STATE_DEFAULT);
+            /* Called every second; a style write repaints the arc even with the same colour,
+               and these arcs span the whole screen (~145 ms a frame on the 1.75C). */
+            lv_color_t c = battColor(p, chg[i]);
+            if (!lv_color_eq(lv_obj_get_style_arc_color(arcs[i], LV_PART_INDICATOR), c))
+                  lv_obj_set_style_arc_color(arcs[i], c, LV_PART_INDICATOR | LV_STATE_DEFAULT);
       }
 }
 

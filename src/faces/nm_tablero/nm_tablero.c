@@ -9,6 +9,7 @@
 #include <math.h>
 #include <stdio.h>
 #include "../../common/navi_face.h"
+#include "../../common/ui_prescale.h"
 #include "../../ui/ui.h"
 
 lv_obj_t *face_nm_tablero;
@@ -70,6 +71,7 @@ void init_face_nm_tablero(void (*callback)(const char *, const lv_image_dsc_t *,
     lv_obj_set_style_arc_width(sweep, 10, LV_PART_INDICATOR | LV_STATE_DEFAULT);
     lv_obj_set_style_arc_color(sweep, lv_color_hex(NF_AMBER), LV_PART_INDICATOR | LV_STATE_DEFAULT);
     lv_obj_set_style_arc_rounded(sweep, false, LV_PART_INDICATOR | LV_STATE_DEFAULT);
+    nf_arc_cache(sweep);
 
     for (int h = 0; h <= 12; h++)
     {
@@ -127,7 +129,7 @@ void init_face_nm_tablero(void (*callback)(const char *, const lv_image_dsc_t *,
     }
     tempL = nf_label(face_nm_tablero, &lv_font_montserrat_20, NF_BLUE, 52, 150, "--");
     wxIcon = lv_image_create(face_nm_tablero);
-    lv_image_set_scale(wxIcon, 110);
+    ui_image_scale(wxIcon, 110);
     lv_obj_align(wxIcon, LV_ALIGN_CENTER, 108, 150);
     setWeatherIcon(wxIcon, 0, true);
 

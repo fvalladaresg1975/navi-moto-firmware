@@ -15,6 +15,7 @@ Firmware de **Navi Moto**: una pantalla redonda **Waveshare ESP32-S3 Touch AMOLE
 - **Detección de caídas** con el acelerómetro/giroscopio QMI8658: golpe fuerte + moto tumbada, solo si la moto venía a más de 20 km/h según el GPS del celular (sacar la placa del anclaje estacionado no la dispara) → cuenta regresiva de 30 s con «Estoy bien»; si nadie la cancela, la app envía un SMS con la ubicación a los contactos de emergencia.
 - **Batería de la placa y del teléfono** en el panel de control (deslizar hacia abajo).
 - **Ahorro de energía** con la pantalla apagada: no se dibuja nada, el panel AMOLED duerme y el procesador baja a 80 MHz; el sensor de caídas se apaga si la detección está desactivada. El puerto serie muestra una línea `[POWER]` por minuto con cuánto se dibujó.
+- **Pantalla fluida** (v2.5): el envío al panel corre en el otro núcleo mientras LVGL dibuja; cada cuadro se arma completo en PSRAM y se envía de una vez, sincronizado con el pin TE del panel (GPIO13 en ambas placas), así lo que se desliza no se ve quebrado. Las imágenes escaladas y los arcos del panel de control se guardan ya dibujados.
 - **Clima**, calendario, cronómetro, estadísticas del último viaje.
 - Interfaz en español, pantalla de inicio con la moto, reloj RTC y batería (PMU AXP2101).
 

@@ -49,6 +49,7 @@
 #include "ui/custom_face.h"
 #include "common/api.h"
 #include "common/navi_face.h"
+#include "common/ui_prescale.h"
 
 #include "main.h"
 #include "displays/pins.h"
@@ -66,6 +67,13 @@
 #elif defined(VIEWE_SMARTRING) || defined(VIEWE_KNOB_15) || defined(VIEWE_S3_1_5) || defined(ESPS3_1_75)|| defined(ESPS3_2_06)
 #include "displays/viewe.hpp"
 #define SW_ROTATION
+#if defined(ESPS3_1_75)
+/* Send each frame to the panel whole, in one go, instead of every 40-row band as soon as
+   it is drawn. With bands a frame took 40-70 ms to reach the panel, several of its
+   refreshes, so anything moving sideways (the hourly forecast) showed broken, stepped
+   edges. See my_disp_flush(). */
+#define FULL_FRAME
+#endif
 #elif defined(VIEWE_ECHO_EAR)
 #include "displays/echo_ear.hpp"
 #elif defined(ELECROW_S3)
@@ -459,12 +467,220 @@ static unsigned long panelChangedMs = 0;
 #define CPU_MHZ_LIT 240
 #define CPU_MHZ_DARK 80   // enough for BLE and the crash detection, nothing to draw
 
+/* v2.5: the transfer to the panel runs on core 0 (flushTask) while LVGL draws on core 1.
+   Sending a full 466x466 frame over QSPI takes ~20 ms, which used to be added to every
+   frame's drawing time (measured on the 1.75C). With plain bands LVGL only reuses a band
+   buffer after lv_display_flush_ready(), so the band being sent is never overwritten.
+   Anything else that talks to the panel must call displayBusIdle() first, so it never
+   interleaves with a transfer. */
+static TaskHandle_t flushTask = NULL;
+static volatile bool flushBusy = false;
+static lv_display_t *flushDisplay;
+static lv_area_t flushArea;
+static uint8_t *flushData;
+// Rotated bands (plain band mode) or, with FULL_FRAME, each piece on its way out of PSRAM.
+static uint8_t rotatedBuf[lvBufferSize];
+
+#ifdef FULL_FRAME
+/* With FULL_FRAME the bands are still drawn in internal RAM, which is fast, but each one
+   is only converted and copied into a frame buffer in PSRAM - by copyTask, on core 0,
+   while LVGL draws the next band into its other band buffer. After the frame's last band
+   flushTask sends the whole frame - when the panel's TE pin is known, right as a panel
+   refresh starts - while LVGL draws the next frame into the other PSRAM buffer. (Drawing
+   straight into PSRAM, LVGL's direct mode, was tried first: it made every full frame
+   15-27 ms slower.) Measured on the 1.75C: PSRAM costs ~25% of the frame rate, as it
+   shares the cache with the fonts and images being drawn; worth it for whole frames. */
+#define FRAME_PARTS 64
+typedef struct
+{
+  lv_area_t area;  // on the panel (already rotated)
+  uint32_t offset; // into px
+} frame_part_t;
+typedef struct
+{
+  uint8_t *px; // big-endian RGB565, the parts one after the other
+  uint32_t used;
+  frame_part_t parts[FRAME_PARTS];
+  uint32_t count;
+} frame_t;
+static frame_t frames[2];
+static frame_t *frameFill = NULL; // filled by my_disp_flush(); NULL = no PSRAM, plain bands
+static frame_t *frameSend = NULL; // sent by flushTask
+static uint32_t frameBytes;
+// The SPI driver cannot send straight from PSRAM, so each piece goes through internal
+// RAM. rotatedBuf is free: plain bands are not used in this mode.
+#define frameStage rotatedBuf
+static TaskHandle_t copyTask = NULL;
+static volatile bool copyBusy = false;
+static lv_display_t *copyDisplay;
+static lv_area_t copyArea;
+static uint8_t *copyData;
+static bool copyLast;
+
+#ifdef LCD_TE
+static SemaphoreHandle_t teSem;
+static void IRAM_ATTR teIsr(void)
+{
+  BaseType_t woken = pdFALSE;
+  xSemaphoreGiveFromISR(teSem, &woken);
+  if (woken)
+    portYIELD_FROM_ISR();
+}
+#endif
+
+/* Wait for the end of the panel's vertical blank, when it starts showing a refresh from
+   the top. Sent from then on, a frame that takes 17-33 ms (a full one takes ~20) is
+   behind the panel's scan all through that refresh and ahead of it all through the
+   next, so each refresh shows one frame or the other, never parts of both. */
+static void frameWaitTe(void)
+{
+#ifdef LCD_TE
+  static uint8_t misses = 0;
+  xSemaphoreTake(teSem, 0); // an old pulse
+  if (xSemaphoreTake(teSem, pdMS_TO_TICKS(25)) == pdTRUE)
+    misses = 0;
+  else if (++misses >= 3)
+  {
+    // no pulses for a while: switch them on again, in case the panel lost the setting
+    tft.tearingOn();
+    misses = 0;
+  }
+#endif
+}
+
+static void frameSendAll(frame_t *f)
+{
+  for (uint32_t i = 0; i < f->count; i++)
+  {
+    frame_part_t *p = &f->parts[i];
+    int32_t w = lv_area_get_width(&p->area);
+    int32_t h = lv_area_get_height(&p->area);
+    int32_t rows = LV_MAX(2, (int32_t)(lvBufferSize / (w * 2)) & ~1); // even, like every area
+    const uint8_t *src = f->px + p->offset;
+    for (int32_t y = 0; y < h; y += rows)
+    {
+      int32_t n = LV_MIN(rows, h - y);
+      memcpy(frameStage, src + y * w * 2, n * w * 2);
+      tft.pushImageDMA(p->area.x1, p->area.y1 + y, w, n, (uint16_t *)frameStage);
+    }
+  }
+  f->count = 0;
+  f->used = 0;
+}
+
+static void flushTaskLoop(void *);
+
+// The frame being filled is complete (or full): send it, and fill the other one.
+static void frameHandOver(void)
+{
+  if (frameFill->count == 0)
+    return;
+  if (!flushTask)
+    xTaskCreatePinnedToCore(flushTaskLoop, "flush", 3072, NULL, 3, &flushTask, 0);
+  // The frame before may still be going out. Sleep, not spin: this runs in copyTask,
+  // on the same core as flushTask but at a higher priority (a busy wait here starved
+  // flushTask and tripped the task watchdog).
+  while (flushBusy)
+    vTaskDelay(1);
+  frameSend = frameFill;
+  frameFill = frameFill == &frames[0] ? &frames[1] : &frames[0];
+  if (flushTask)
+  {
+    flushBusy = true;
+    xTaskNotifyGive(flushTask);
+  }
+  else
+  {
+    frameWaitTe();
+    frameSendAll(frameSend);
+    frameSend = NULL;
+  }
+}
+
+// One drawn band: convert it to the panel's byte order and add it to the frame.
+static void frameCopyBand(lv_display_t *display, const lv_area_t *area, uint8_t *data, bool last)
+{
+  uint32_t w = lv_area_get_width(area);
+  uint32_t h = lv_area_get_height(area);
+  uint32_t bytes = w * h * 2;
+  if (frameFill->count == FRAME_PARTS || frameFill->used + bytes > frameBytes)
+    frameHandOver(); // more than a screenful in one frame: send what there is
+  lv_draw_sw_rgb565_swap(data, w * h);
+  frame_part_t *p = &frameFill->parts[frameFill->count++];
+  p->area = *area;
+  p->offset = frameFill->used;
+  uint8_t *dst = frameFill->px + p->offset;
+#ifdef SW_ROTATION
+  lv_display_rotation_t rotation = lv_display_get_rotation(display);
+  if (rotation != LV_DISPLAY_ROTATION_0)
+  {
+    lv_display_rotate_area(display, &p->area);
+    lv_draw_sw_rotate(data, dst, w, h, w * 2, lv_area_get_width(&p->area) * 2, rotation, LV_COLOR_FORMAT_RGB565);
+  }
+  else
+#endif
+    memcpy(dst, data, bytes);
+  frameFill->used += bytes;
+  if (last)
+    frameHandOver();
+}
+
+static void copyTaskLoop(void *)
+{
+  for (;;)
+  {
+    ulTaskNotifyTake(pdTRUE, portMAX_DELAY);
+    frameCopyBand(copyDisplay, &copyArea, copyData, copyLast);
+    copyBusy = false;
+    lv_display_flush_ready(copyDisplay); // LVGL can draw into this band buffer again
+  }
+}
+#endif
+
+static void flushTaskLoop(void *)
+{
+  for (;;)
+  {
+    ulTaskNotifyTake(pdTRUE, portMAX_DELAY);
+#ifdef FULL_FRAME
+    if (frameSend)
+    {
+      frameWaitTe();
+      frameSendAll(frameSend);
+      frameSend = NULL;
+      flushBusy = false;
+      continue;
+    }
+#endif
+    uint32_t w = lv_area_get_width(&flushArea);
+    uint32_t h = lv_area_get_height(&flushArea);
+    lv_draw_sw_rgb565_swap(flushData, w * h);
+    tft.pushImageDMA(flushArea.x1, flushArea.y1, w, h, (uint16_t *)flushData);
+    flushBusy = false;
+    lv_display_flush_ready(flushDisplay);
+  }
+}
+
+void displayBusIdle(void)
+{
+#ifdef FULL_FRAME
+  while (copyBusy) // a last band still to be handed over
+    delayMicroseconds(50);
+#endif
+  while (flushBusy)
+    delayMicroseconds(50);
+}
+
 /* Display flushing */
 void my_disp_flush(lv_display_t *display, const lv_area_t *area, unsigned char *data)
 {
   if (panelState == PANEL_ASLEEP)
   {
     // the panel takes no pixels while asleep; screenPowerSync() repaints all on wake
+#ifdef FULL_FRAME
+    if (frameFill)
+      frameFill->count = frameFill->used = 0;
+#endif
     lv_display_flush_ready(display);
     return;
   }
@@ -473,6 +689,50 @@ void my_disp_flush(lv_display_t *display, const lv_area_t *area, unsigned char *
   uint32_t h = lv_area_get_height(area);
   powerFlushes++;
   powerFlushPx += w * h;
+
+#ifdef FULL_FRAME
+  if (frameFill)
+  {
+    bool last = lv_display_flush_is_last(display);
+    if (!copyTask)
+      xTaskCreatePinnedToCore(copyTaskLoop, "fcopy", 3072, NULL, 4, &copyTask, 0);
+    if (copyTask)
+    {
+      copyDisplay = display;
+      copyArea = *area;
+      copyData = data;
+      copyLast = last;
+      copyBusy = true;
+      xTaskNotifyGive(copyTask);
+      return;
+    }
+    frameCopyBand(display, area, data, last);
+    lv_display_flush_ready(display);
+    return;
+  }
+#endif
+
+#ifdef SW_ROTATION
+  bool rotated = lv_display_get_rotation(display) != LV_DISPLAY_ROTATION_0;
+#else
+  bool rotated = false;
+#endif
+  if (!rotated)
+  {
+    if (!flushTask)
+      xTaskCreatePinnedToCore(flushTaskLoop, "flush", 3072, NULL, 3, &flushTask, 0);
+    if (flushTask)
+    {
+      flushDisplay = display;
+      flushArea = *area;
+      flushData = data;
+      flushBusy = true;
+      xTaskNotifyGive(flushTask);
+      return;
+    }
+  }
+
+  // Rotated (or no task): convert and send here, as before.
   lv_draw_sw_rgb565_swap(data, w * h);
 
 #ifdef SW_ROTATION
@@ -487,12 +747,11 @@ void my_disp_flush(lv_display_t *display, const lv_area_t *area, unsigned char *
     uint32_t src_stride = lv_draw_buf_width_to_stride(lv_area_get_width(area), cf);
     /*Calculate the stride of the destination (rotated) area too*/
     uint32_t dest_stride = lv_draw_buf_width_to_stride(lv_area_get_width(&rotated_area), cf);
-    /*Have a buffer to store the rotated area and perform the rotation*/
-    static uint8_t rotated_buf[lvBufferSize];
-    lv_draw_sw_rotate(data, rotated_buf, w, h, src_stride, dest_stride, rotation, cf);
+    /*Rotate into rotatedBuf*/
+    lv_draw_sw_rotate(data, rotatedBuf, w, h, src_stride, dest_stride, rotation, cf);
     /*Use the rotated area and rotated buffer from now on*/
     area = &rotated_area;
-    data = rotated_buf;
+    data = rotatedBuf;
   }
 #endif
 
@@ -989,6 +1248,7 @@ void screenBrightness(uint8_t value)
     return;
   }
   shownBrightness = value;
+  displayBusIdle();
   tft.setBrightness(value);
 #endif
 }
@@ -1000,6 +1260,7 @@ void screenPowerSync(void)
 #if ESPS3_1_75
   if (screenDark && panelState == PANEL_ON)
   {
+    displayBusIdle();
     tft.panelSleep();
     panelState = PANEL_ASLEEP;
     panelChangedMs = millis();
@@ -1012,6 +1273,7 @@ void screenPowerSync(void)
     {
       delay(5);
     }
+    displayBusIdle();
     tft.panelWakeStart();
     panelState = PANEL_WAKING;
     panelChangedMs = millis();
@@ -1020,6 +1282,7 @@ void screenPowerSync(void)
   }
   else if (panelState == PANEL_WAKING && millis() - panelChangedMs >= PANEL_WAKE_MS)
   {
+    displayBusIdle();
     tft.panelWakeShow();
     panelState = PANEL_ON;
   }
@@ -2308,6 +2571,7 @@ if (SCREEN_WIDTH != SCREEN_HEIGHT && sel % 2 != 0) {
 #ifdef SW_ROTATION
   lv_display_set_rotation(lv_display_get_default(), getRotation(sel));
 #else
+  displayBusIdle();
   tft.setRotation(sel);
   // screen rotation has changed, invalidate to redraw
   lv_obj_invalidate(lv_screen_active());
@@ -3103,7 +3367,31 @@ void hal_setup()
   static auto *lvDisplay = lv_display_create(screenWidth, screenHeight);
   lv_display_set_color_format(lvDisplay, LV_COLOR_FORMAT_RGB565);
   lv_display_set_flush_cb(lvDisplay, my_disp_flush);
+#ifdef FULL_FRAME
+  frameBytes = screenWidth * screenHeight * 2;
+  frames[0].px = (uint8_t *)heap_caps_malloc(frameBytes, MALLOC_CAP_SPIRAM);
+  frames[1].px = (uint8_t *)heap_caps_malloc(frameBytes, MALLOC_CAP_SPIRAM);
+  if (frames[0].px && frames[1].px)
+  {
+    frameFill = &frames[0];
+    lv_display_set_buffers(lvDisplay, lvBuffer[0], lvBuffer[1], lvBufferSize, LV_DISPLAY_RENDER_MODE_PARTIAL);
+#ifdef LCD_TE
+    teSem = xSemaphoreCreateBinary();
+    pinMode(LCD_TE, INPUT);
+    attachInterrupt(LCD_TE, teIsr, FALLING);
+    tft.tearingOn();
+#endif
+  }
+  else
+  {
+    // no PSRAM to spare: bands, as before
+    heap_caps_free(frames[0].px);
+    heap_caps_free(frames[1].px);
+    lv_display_set_buffers(lvDisplay, lvBuffer[0], lvBuffer[1], lvBufferSize, LV_DISPLAY_RENDER_MODE_PARTIAL);
+  }
+#else
   lv_display_set_buffers(lvDisplay, lvBuffer[0], lvBuffer[1], lvBufferSize, LV_DISPLAY_RENDER_MODE_PARTIAL);
+#endif
   lv_display_add_event_cb(lvDisplay, rounder_event_cb, LV_EVENT_INVALIDATE_AREA, NULL);
 
 #ifdef SW_ROTATION
@@ -3543,12 +3831,13 @@ void hal_loop()
     // malloc(), which on Arduino-ESP32 serves internal RAM only. If PSRAM really is
     // present, pointing LVGL's allocator at it moves every screen/label/style off the
     // 192 KB internal heap that BLE also depends on.
-    Serial.printf("[HEAP] up=%lus free=%u maxAlloc=%u minEver=%u | psramFree=%u | lastReset=%d %s\n",
+    Serial.printf("[HEAP] up=%lus free=%u maxAlloc=%u minEver=%u | psramFree=%u prescaled=%u | lastReset=%d %s\n",
                   millis() / 1000UL,
                   (unsigned)ESP.getFreeHeap(),
                   (unsigned)ESP.getMaxAllocHeap(),
                   (unsigned)ESP.getMinFreeHeap(),
                   (unsigned)ESP.getFreePsram(),
+                  (unsigned)ui_image_prescaled_bytes(),
                   lastResetCode, lastResetReason);
   }
 
@@ -3660,7 +3949,7 @@ void hal_loop()
     if (musicStatePending)
     {
       musicStatePending = false;
-      lv_image_set_src(ui_musicPlayButton,
+      ui_image_src(ui_musicPlayButton,
                        pendingMusicPlaying ? &ui_img_pause_png : &ui_img_play_png);
     }
 

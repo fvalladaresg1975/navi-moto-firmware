@@ -106,6 +106,12 @@ extern "C"
        both filling bottom-up, like the control panel. */
     lv_obj_t *nf_edge_arc(lv_obj_t *parent, int side, int width, int inset);
     void nf_arc_battery(lv_obj_t *arc, int pct, bool charging);
+    /* Keep a big lv_arc as a picture. LVGL's software arc is slow at this size: a
+       screen-sized one added ~33 ms to every frame on the 466 px boards (measured on the
+       1.75C). With this the arc is drawn the normal way once, right after it changes, and
+       kept as thin ARGB strips (PSRAM) that each frame only copies. Call once after
+       creating the arc; it looks the same. */
+    void nf_arc_cache(lv_obj_t *arc);
     /* Battery colour: blue while charging, otherwise green / amber / red. */
     lv_color_t nf_battery_color(int pct, bool charging);
     /* "23,4 km" / "850 m" */

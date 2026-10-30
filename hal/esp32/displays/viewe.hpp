@@ -128,6 +128,15 @@ public:
         bus->sendCommand(CO5300_C_DISPON);
     }
 
+    /* Turn on the panel's tearing-effect output: one pulse per refresh, in the vertical
+       blank. Harmless if the board does not wire the TE pin to the ESP32. */
+    void tearingOn(void)
+    {
+        bus->beginWrite();
+        bus->writeC8D8(CO5300_WC_TEARON, 0x00);
+        bus->endWrite();
+    }
+
     void writePixel(int32_t x, int32_t y, const uint16_t color)
     {
         gfx->writePixel(x, y, color);

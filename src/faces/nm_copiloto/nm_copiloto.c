@@ -8,6 +8,7 @@
 
 #include <stdio.h>
 #include "../../common/navi_face.h"
+#include "../../common/ui_prescale.h"
 #include "../../ui/ui.h"
 
 lv_obj_t *face_nm_copiloto;
@@ -27,7 +28,7 @@ void init_face_nm_copiloto(void (*callback)(const char *, const lv_image_dsc_t *
     minL = nf_label(face_nm_copiloto, &nm_digits_120, NF_AMBER, 0, 86, "00");
     statusL = nf_label(face_nm_copiloto, &lv_font_montserrat_20, NF_GREEN, -18, 168, "");
     wxIcon = lv_image_create(face_nm_copiloto);
-    lv_image_set_scale(wxIcon, 120);
+    ui_image_scale(wxIcon, 120);
     setWeatherIcon(wxIcon, 0, true);
     lv_obj_add_flag(wxIcon, LV_OBJ_FLAG_HIDDEN);
 

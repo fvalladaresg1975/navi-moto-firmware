@@ -6,6 +6,7 @@
 */
 
 #include "contacts.h"
+#include "../../common/ui_prescale.h"
 /* For UI_SCALE_PX/UI_SCALE - this app's rows were laid out in raw pixels for a 240x240
    screen, so on the 466x466 panel everything rendered at roughly half size. ui.c pulls
    the same header in the same way. */
@@ -105,7 +106,7 @@ void addContact(const char *name, const char *number, bool sos)
     lv_obj_set_style_pad_bottom(ui_contactPanel, 0, LV_PART_MAIN | LV_STATE_DEFAULT);
 
     lv_obj_t *ui_contactIcon = lv_image_create(ui_contactPanel);
-    lv_image_set_src(ui_contactIcon, sos ? &ui_img_sos_contact_png : &ui_img_contact_png);
+    ui_image_src(ui_contactIcon, sos ? &ui_img_sos_contact_png : &ui_img_contact_png);
     lv_obj_set_width(ui_contactIcon, LV_SIZE_CONTENT);  /// 1
     lv_obj_set_height(ui_contactIcon, LV_SIZE_CONTENT); /// 1
     lv_obj_set_x(ui_contactIcon, UI_SCALE_PX(10));
@@ -114,7 +115,7 @@ void addContact(const char *name, const char *number, bool sos)
     lv_obj_add_flag(ui_contactIcon, LV_OBJ_FLAG_ADV_HITTEST);  /// Flags
     lv_obj_remove_flag(ui_contactIcon, LV_OBJ_FLAG_SCROLLABLE); /// Flags
     /* Grow the avatar with the panel, same trick the app/settings lists use. */
-    lv_image_set_scale(ui_contactIcon, (256 * UI_SCALE) / 256);
+    ui_image_scale(ui_contactIcon, (256 * UI_SCALE) / 256);
 
     lv_obj_t *ui_contactNumber = lv_label_create(ui_contactPanel);
     lv_obj_set_width(ui_contactNumber, UI_SCALE_PX(140));

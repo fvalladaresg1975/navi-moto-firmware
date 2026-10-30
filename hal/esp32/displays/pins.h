@@ -253,6 +253,10 @@
 #define TOUCH_SCL 14
 #define TOUCH_IRQ 11
 
+// The panel's tearing-effect output, 60 pulses a second once enabled (found by probing
+// the free pins on both boards; not in Waveshare's pin_config.h).
+#define LCD_TE 13
+
 // The 1.75C moved both resets (Waveshare's pin_config.h for each board).
 #if ESPS3_1_75C
 #define LCD_RST 1

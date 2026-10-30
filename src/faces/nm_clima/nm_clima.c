@@ -8,6 +8,7 @@
 
 #include <stdio.h>
 #include "../../common/navi_face.h"
+#include "../../common/ui_prescale.h"
 #include "../../ui/ui.h"
 
 lv_obj_t *face_nm_clima;
@@ -40,7 +41,7 @@ void init_face_nm_clima(void (*callback)(const char *, const lv_image_dsc_t *, l
     lv_label_set_long_mode(dateL, LV_LABEL_LONG_DOT);
 
     wxIcon = lv_image_create(face_nm_clima);
-    lv_image_set_scale(wxIcon, 330); // ~82 px
+    ui_image_scale(wxIcon, 330); // ~82 px
     lv_obj_align(wxIcon, LV_ALIGN_CENTER, -58, -28);
     setWeatherIcon(wxIcon, 0, true);
     tempL = nf_label(face_nm_clima, &lv_font_montserrat_48, NF_WHITE, 34, -28, "--");

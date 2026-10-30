@@ -8,6 +8,7 @@
 
 #include <stdio.h>
 #include "../../common/navi_face.h"
+#include "../../common/ui_prescale.h"
 #include "../../ui/ui.h"
 
 LV_IMG_DECLARE(ui_img_navimoto_logo); // the idle navigation logo (white motorcycle)
@@ -57,7 +58,7 @@ void init_face_nm_pixel(void (*callback)(const char *, const lv_image_dsc_t *, l
 
     lv_obj_t *logo = lv_image_create(face_nm_pixel);
     lv_image_set_src(logo, &ui_img_navimoto_logo);
-    lv_image_set_scale(logo, 150); // ~56x30
+    ui_image_scale(logo, 150); // ~56x30
     lv_obj_align(logo, LV_ALIGN_CENTER, -8, -172);
 
     dot = lv_obj_create(face_nm_pixel);
@@ -77,7 +78,7 @@ void init_face_nm_pixel(void (*callback)(const char *, const lv_image_dsc_t *, l
         bar(TX[i], 120, TCOL[i]);
     }
     wxIcon = lv_image_create(face_nm_pixel);
-    lv_image_set_scale(wxIcon, 150);
+    ui_image_scale(wxIcon, 150);
     lv_obj_align(wxIcon, LV_ALIGN_CENTER, TX[0], 57);
     setWeatherIcon(wxIcon, 0, true);
     wind_mark(TX[1], 57);
