@@ -2,6 +2,22 @@
 
 Firmware de **Navi Moto**: una pantalla redonda **Waveshare ESP32-S3 Touch AMOLED 1.75** (466×466) montada en el manillar como **navegador para moto**, al estilo Beeline / BaRing. Funciona junto a la app Android **[navi-moto](https://github.com/fvalladaresg1975/navi-moto)**, que calcula las rutas y le envía todo por Bluetooth LE.
 
+## Imágenes
+
+Capturas reales de la pantalla de la placa.
+
+| Modo ruta | Indicaciones de Google Maps | Panel de control |
+|:---:|:---:|:---:|
+| <img src="docs/images/navegacion-ruta.png" alt="Modo ruta con calles, giro, velocidad y límite" width="210"> | <img src="docs/images/navegacion-flecha.png" alt="Flecha de giro con indicación en la rotonda" width="210"> | <img src="docs/images/placa-control.png" alt="Panel de música, volumen y baterías" width="210"> |
+
+| Pixel Moto | Tablero | Clima de ruta | Copiloto |
+|:---:|:---:|:---:|:---:|
+| <img src="docs/images/esfera-pixel-moto.png" alt="Esfera Pixel Moto" width="210"> | <img src="docs/images/esfera-tablero.png" alt="Esfera Tablero" width="210"> | <img src="docs/images/esfera-clima-ruta.png" alt="Esfera Clima de ruta" width="210"> | <img src="docs/images/esfera-copiloto.png" alt="Esfera Copiloto" width="210"> |
+
+| Clima | Posible caída | Batería muy baja |
+|:---:|:---:|:---:|
+| <img src="docs/images/placa-clima.png" alt="Pantalla del clima" width="210"> | <img src="docs/images/aviso-caida.png" alt="Cuenta regresiva de caída" width="210"> | <img src="docs/images/aviso-bateria.png" alt="Cuenta regresiva de batería baja" width="210"> |
+
 ## Funciones
 
 - **Modo ruta** — el camino por delante dibujado sobre la pantalla, caja con la flecha y distancia del próximo giro, velocidad, límite de la vía y aviso rojo al excederlo, distancia restante y anillo de avance hacia el giro.
