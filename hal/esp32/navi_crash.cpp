@@ -439,6 +439,11 @@ static void sample(unsigned long now)
   }
 }
 
+bool crashBusy(void)
+{
+  return state == CR_IMPACT || state == CR_COUNTDOWN || (state == CR_SOS && !sosAnswered);
+}
+
 void crashLoop(void)
 {
   unsigned long now = millis();

@@ -10,5 +10,6 @@
 void crashSetup(void);                                 // hal_setup, once the I2C bus is up
 void crashLoop(void);                                  // hal_loop, LVGL task
 void crashOnPacket(const uint8_t *data, int length);   // dataCallback, NimBLE task
+bool crashBusy(void);                                  // a crash is being handled, SOS included
 
 #endif

@@ -31,7 +31,7 @@
    with crash detection off; the app's route demo is not stored as a trip) goes with
    app 2.2, which marks the demo (0xCD).
    support/build_firmware.py names the merged .bin after it. */
-#define UI_VERSION "2.5"
+#define UI_VERSION "2.6"
 
 /* Fonts don't scale with UI_SCALE_PX, so step the notification rows up on large panels -
    they were falling back to LV_FONT_DEFAULT (montserrat_14), which together with the

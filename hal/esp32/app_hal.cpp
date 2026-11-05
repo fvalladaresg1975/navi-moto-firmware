@@ -41,6 +41,7 @@
 #include "feedback.h"
 #include "navi_ota.h"   // firmware update over WiFi (0xCB)
 #include "navi_crash.h" // crash detection (0xCC)
+#include "navi_battery.h" // low battery warning and power off
 
 #include <lvgl.h>
 #include "src/libs/tjpgd/tjpgd.h" // LVGL's TJpgDec, for the "Foto" face's photo
@@ -1901,6 +1902,29 @@ int trackTurnProgress(const String &title)
   return (int)pct;
 }
 
+static void tripEnd(void)
+{
+  if (!tripActive)
+  {
+    return;
+  }
+  tripActive = false;
+  uint32_t now = (uint32_t)watch.getEpoch();
+  unsigned long secs = (now > tripStartEpoch) ? (now - tripStartEpoch) : 0;
+  /* Ignore trips that never really started - a navigation dismissed after a few seconds
+     would otherwise overwrite a real trip with noise. */
+  if (tripIsTest)
+  {
+    Timber.i("Test navigation ended: %ld m in %lu s, not stored as a trip", tripDistanceM, secs);
+  }
+  else if (tripDistanceM > 100 && secs > 30)
+  {
+    prefs.putLong("tripdist", tripDistanceM);
+    prefs.putULong("tripsecs", secs);
+    Timber.i("Trip stored: %ld m in %lu s", tripDistanceM, secs);
+  }
+}
+
 void trackTrip(const Navigation &n)
 {
   if (n.active && n.isNavigation)
@@ -1925,25 +1949,37 @@ void trackTrip(const Navigation &n)
       tripLastRemainingM = rem;
     }
   }
-  else if (tripActive)
+  else
   {
-    tripActive = false;
-    uint32_t now = (uint32_t)watch.getEpoch();
-    unsigned long secs = (now > tripStartEpoch) ? (now - tripStartEpoch) : 0;
-    /* Ignore trips that never really started - a navigation dismissed after a few seconds
-       would otherwise overwrite a real trip with noise. */
-    if (tripIsTest)
-    {
-      Timber.i("Test navigation ended: %ld m in %lu s, not stored as a trip", tripDistanceM, secs);
-    }
-    else if (tripDistanceM > 100 && secs > 30)
-    {
-      prefs.putLong("tripdist", tripDistanceM);
-      prefs.putULong("tripsecs", secs);
-      Timber.i("Trip stored: %ld m in %lu s", tripDistanceM, secs);
-    }
+    tripEnd();
   }
 }
+
+#if ESPS3_1_75
+/* For navi_battery.cpp. */
+bool boardBatteryRead(int *percent, int *millivolts)
+{
+  *percent = PMU.getBatteryPercent();
+  *millivolts = PMU.getBattVoltage();
+  return *percent >= 0;
+}
+
+bool boardNavigating(void)
+{
+  return nav.active;
+}
+
+// Everything is cut at once, the panel included, so nothing can be left for afterwards.
+void boardPowerOff(void)
+{
+  tripEnd(); // a navigation cut short is still a trip
+  displayBusIdle();
+  Serial.flush();
+  PMU.shutdown();
+  delay(2000);
+  Serial.println("[BATT] still on after the power off");
+}
+#endif
 
 void get_last_trip(long *meters, unsigned long *seconds)
 {
@@ -3662,6 +3698,7 @@ void hal_setup()
     chargeRefEpoch = (uint32_t)prefs.getULong("battref_t", 0);
     chargeRefPercent = prefs.getInt("battref_p", 0);
     batteryWasOnPower = PMU.isVbusIn();
+    PMU.enableBattVoltageMeasure(); // navi_battery.cpp goes by the voltage near the end
 
     int pct = PMU.getBatteryPercent();
     Timber.i("AXP2101 battery: %d%%, charging: %d, vbus: %d", pct, PMU.isCharging(), PMU.isVbusIn());
@@ -3935,6 +3972,9 @@ void hal_loop()
 
     otaLoop();
     crashLoop();
+#if ESPS3_1_75
+    batteryLoop();
+#endif
 
     if (photoRxDone)
     {
