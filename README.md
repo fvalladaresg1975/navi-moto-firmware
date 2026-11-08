@@ -2,6 +2,8 @@
 
 Firmware de **Navi Moto**: una pantalla redonda **Waveshare ESP32-S3 Touch AMOLED 1.75** (466×466) montada en el manillar como **navegador para moto**, al estilo Beeline / BaRing. Funciona junto a la app Android **[navi-moto](https://github.com/fvalladaresg1975/navi-moto)**, que calcula las rutas y le envía todo por Bluetooth LE.
 
+**¿Cómo se usa?** Mira el [manual de uso](MANUAL.md): primera conexión, modo ruta, modo Google Maps y gestos de la placa.
+
 ## Imágenes
 
 Capturas reales de la pantalla de la placa.
