@@ -2,7 +2,7 @@
 
 Firmware de **Navi Moto**: una pantalla redonda **Waveshare ESP32-S3 Touch AMOLED 1.75** (466×466) montada en el manillar como **navegador para moto**, al estilo Beeline / BaRing. Funciona junto a la app Android **[navi-moto](https://github.com/fvalladaresg1975/navi-moto)**, que calcula las rutas y le envía todo por Bluetooth LE.
 
-**¿Cómo se usa?** Mira el [manual de uso](MANUAL.md): primera conexión, modo ruta, modo Google Maps y gestos de la placa.
+**¿Cómo se usa?** Mira el [manual de uso](MANUAL.md): primera conexión, modo ruta, modo Google Maps, modo CoMaps y gestos de la placa.
 
 ## Imágenes
 
@@ -26,6 +26,7 @@ Capturas reales de la pantalla de la placa.
 - **Calles alrededor** — calles de OpenStreetMap tenues bajo la ruta: la app las envía una sola vez y la placa las gira y desplaza según la posición del conductor.
 - **Zoom según la velocidad** — cerca en ciudad, lejos en carretera (lo decide la app).
 - **Navegación de Google Maps** — indicaciones y flecha de Maps, con velocidad y límite.
+- **Navegación de CoMaps** (app 2.3, sin cambios en el firmware) — la navegación de CoMaps se muestra como el modo ruta, con el camino que calculó CoMaps.
 - **Salir de la navegación desde la placa**, panel de música y volumen durante la navegación, vuelta automática a la navegación.
 - **Notificaciones, llamadas** (contestar / rechazar) y **contactos** (llamar desde la placa).
 - **Esferas propias para moto** (dibujadas con LVGL, sin imágenes): *Pixel Moto* (clima, viento, baterías, último viaje), *Tablero* (la hora como tacómetro, batería como medidor de bencina, testigo BT), *Clima de ruta* (próximas 5 horas con probabilidad de lluvia, viento, atardecer), *Copiloto* (hora gigante, alto contraste) y *Foto* (una foto tuya de fondo, elegida y ajustada en la app con «Esfera con foto»).
