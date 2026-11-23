@@ -42,6 +42,7 @@
 #include "navi_ota.h"   // firmware update over WiFi (0xCB)
 #include "navi_crash.h" // crash detection (0xCC)
 #include "navi_battery.h" // low battery warning and power off
+#include "navi_ble_guard.h" // Bluetooth event log and advertising watch
 
 #include <lvgl.h>
 #include "src/libs/tjpgd/tjpgd.h" // LVGL's TJpgDec, for the "Foto" face's photo
@@ -863,6 +864,7 @@ void screen_on(long extra)
   if (bleAsleep)
   {
     watch.begin();
+    bleGuardBegin();
     bleAsleep = false;
   }
 #endif
@@ -2833,6 +2835,7 @@ void rawDataCallback(uint8_t *data, int len)
 
 void dataCallback(uint8_t *data, int length)
 {
+  bleGuardRx(); // for the [BLE] log: when the phone last sent anything
   /* Fires for every assembled packet, before the library's own parser, which is what lets
      this project add a phone->watch message without patching the vendored library (the
      mistake that made the GPS-heading experiment so painful to undo).
@@ -3518,6 +3521,7 @@ void hal_setup()
   watch.setDataCallback(dataCallback);
   watch.setRawDataCallback(rawDataCallback);
   watch.begin();
+  bleGuardBegin();
   watch.set24Hour(true);
   watch.setBattery(85);
 
@@ -3972,6 +3976,7 @@ void hal_loop()
 
     otaLoop();
     crashLoop();
+    bleGuardLoop(bleAsleep);
 #if ESPS3_1_75
     batteryLoop();
 #endif
